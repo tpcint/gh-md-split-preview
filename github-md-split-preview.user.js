@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub MD Split Preview
 // @namespace    https://github.com/lucidash
-// @version      2.3.0
+// @version      2.3.1
 // @description  GitHub PR/commit/compare의 변경 파일 화면에서 마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에 보여주고 스크롤을 동기화합니다.
 // @author       muzi
 // @homepageURL  https://github.com/tpcint/gh-md-split-preview
@@ -517,10 +517,16 @@
 
   const views = new WeakMap();
 
-  // GitHub 은 파일명을 U+200E(LTR mark) 등 방향 제어문자로 감싼다.
-  // 리터럴로 넣으면 복사/붙여넣기 과정에서 사라질 수 있어 이스케이프로 적는다.
-  const INVISIBLE = /[​-‏‪-‮⁦-⁩﻿]/g;
-  const cleanPath = (s) => String(s || '').replace(INVISIBLE, '').trim();
+  // GitHub 은 파일명을 U+200E(LTR mark) 등 방향 제어문자로 감싸서 내려준다.
+  // 이 문자들을 정규식에 리터럴로 적으면 소스 파일 자체에 bidi 제어문자가 섞여
+  // GitHub 이 "hidden Unicode text"(Trojan Source) 경고를 띄우므로, 코드포인트로만 비교한다.
+  const isInvisibleCp = (cp) =>
+    (cp >= 0x200b && cp <= 0x200f) || // zero-width space ~ RLM
+    (cp >= 0x202a && cp <= 0x202e) || // bidi embedding / override
+    (cp >= 0x2066 && cp <= 0x2069) || // bidi isolate
+    cp === 0xfeff;                    // BOM
+  const cleanPath = (s) =>
+    [...String(s || '')].filter((ch) => !isInvisibleCp(ch.codePointAt(0))).join('').trim();
 
   function getFilePath(fileEl) {
     const candidates = [
