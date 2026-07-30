@@ -1,0 +1,93 @@
+# GitHub MD Split Preview
+
+GitHub의 변경 파일 화면(PR / commit / compare)에서 **마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에** 보여주고, 스크롤을 서로 맞춰주는 유저스크립트입니다.
+
+GitHub에는 source diff ↔ rich diff *토글*만 있어서 둘을 나란히 볼 수 없습니다. 이 스크립트가 그걸 채웁니다.
+
+- 좌: 평소의 diff 그대로 (리뷰 코멘트 등 GitHub 기능 전부 유지)
+- 우: 그 파일의 **변경 후** 내용을 렌더링한 결과
+- 추가(`+`)된 줄이 들어간 블록은 렌더링 쪽에도 **초록 바**로 표시 → 변경이 실제 문서에서 어떻게 보이는지 바로 확인
+- 가운데 바를 드래그해 좌우 비율 조절 (설정은 브라우저에 저장)
+
+## 설치
+
+### 1. Tampermonkey 설치
+
+[Tampermonkey](https://www.tampermonkey.net/) (Chrome / Edge / Firefox 등)
+
+### 2. ⚠️ `사용자 스크립트 허용` 켜기 — 이걸 안 하면 아무것도 안 됩니다
+
+Chrome 138부터 생긴 설정입니다. **꺼져 있으면 스크립트가 정상 설치·활성 상태여도 전혀 실행되지 않고, 콘솔에 에러조차 남지 않습니다.**
+
+1. `chrome://extensions` → Tampermonkey → **세부정보**
+2. **`사용자 스크립트 허용`** 토글 ON
+
+> Tampermonkey 대시보드 상단에 "`사용자 스크립트 허용` 확장 설정을 활성화하세요" 배너가 보인다면 아직 꺼져 있는 것입니다.
+
+### 3. 스크립트 설치
+
+아래 링크를 열면 Tampermonkey 설치 화면이 뜹니다.
+
+**[👉 설치하기](https://raw.githubusercontent.com/tpcint/gh-md-split-preview/main/github-md-split-preview.user.js)**
+
+이후 업데이트는 Tampermonkey가 자동으로 받아옵니다.
+
+## 사용법
+
+PR의 변경 파일 화면을 열면 md 파일마다 헤더 아래에 이런 바가 생깁니다.
+
+```
+⇄ 렌더링 나란히 보기                    114줄 · 추가 114줄
+```
+
+버튼으로 켜고 끌 수 있고, 마지막 상태가 기억됩니다.
+
+> **Unified diff에서 보세요.** Split diff 위에 2단을 얹으면 사실상 4단이 되어 매우 좁아집니다. Split이 감지되면 바에 안내가 표시됩니다.
+
+## 동작 원리
+
+diff DOM에 **이미 들어 있는** "변경 후" 라인을 긁어 마크다운 원문을 복원한 뒤 [marked](https://github.com/markedjs/marked)로 렌더링합니다.
+
+**네트워크 요청이 없습니다.** 그래서 private repo·GHE에서도 토큰 없이 그대로 동작하고, API rate limit도 걸리지 않습니다.
+
+렌더링된 블록마다 원본 라인번호를 심어두고, 좌우 패널의 `[라인번호 → 스크롤 오프셋]` 앵커를 선형 보간해 스크롤을 맞춥니다. 코드블록·표처럼 소스와 렌더 높이가 크게 다른 구간에서도 어긋나지 않습니다.
+
+### 지원하는 GitHub DOM
+
+GitHub이 diff를 React로 재작성하면서 예전 셀렉터(`data-code-marker`, `table.diff-table` 등)는 더 이상 존재하지 않습니다. 현행 구조를 쓰되, 구형(GHE 등)도 폴백으로 지원합니다.
+
+| 용도 | 셀렉터 |
+|---|---|
+| 파일 컨테이너 | `div[id^="diff-"][class*="Diff-module__diffTargetable"]` |
+| 행 | `tr.diff-line-row` |
+| 텍스트 셀 | `td.diff-text-cell` (split이면 마지막이 변경 후) |
+| 순수 텍스트 | `.diff-text-inner` (마커 미포함) |
+| 변경 후 라인번호 | `data-diff-line-key="b:20-l:20-r:20"` 의 `r:` |
+
+## 한계
+
+- GitHub이 **접어둔 구간**은 diff DOM에 없어 렌더링에서도 빠집니다. 그 자리에 `⋯ 접힌 구간 ⋯` 배너가 표시되고, Expand를 누르면 자동으로 다시 렌더링됩니다.
+- mermaid 등 GitHub 전용 위젯은 코드블록 그대로 나옵니다.
+- YAML frontmatter는 GitHub처럼 표로 렌더링합니다. 단 diff에 1번 줄부터 포함돼 있을 때만 — 기존 파일 수정이라 frontmatter가 diff에 없으면 표를 만들 근거가 없습니다.
+
+## 문제가 생기면
+
+브라우저 콘솔에 상태가 한 줄 찍힙니다.
+
+```
+[md-split] 파일 34 · attached:24 not-md:10
+```
+
+- **줄 자체가 없다** → 스크립트가 실행되지 않은 것. 위의 `사용자 스크립트 허용`을 확인하세요.
+- **`not-rendered-yet`이 남아 있다** → diff가 아직 로딩 중. 스크롤하면 처리됩니다.
+- **`not-md`만 있고 `attached`가 0** → 파일명 인식 실패. GitHub DOM이 바뀐 것일 수 있으니 이슈로 알려주세요.
+
+더 자세한 로그가 필요하면 스크립트 상단의 `const DEBUG = false;`를 `true`로 바꾸세요.
+
+## 개발
+
+`github-md-split-preview.user.js` 한 파일이 전부입니다. 빌드 단계가 없습니다.
+
+릴리스는 **`@version`을 올려서 `main`에 push**하면 끝입니다. Tampermonkey가 `@updateURL`을 주기적으로 확인해 각자에게 배포합니다. **버전을 올리지 않으면 업데이트가 감지되지 않습니다.**
+
+로컬에서 고칠 때는 Tampermonkey 대시보드에서 직접 편집하는 게 빠릅니다. 저장은 편집기의 **파일 → 저장** 메뉴를 쓰세요 (`Ctrl+S`는 동작하지 않습니다).
