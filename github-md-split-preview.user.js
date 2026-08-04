@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub MD Split Preview
 // @namespace    https://github.com/lucidash
-// @version      2.3.1
+// @version      2.5.0
 // @description  GitHub PR/commit/compare의 변경 파일 화면에서 마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에 보여주고 스크롤을 동기화합니다.
 // @author       muzi
 // @homepageURL  https://github.com/tpcint/gh-md-split-preview
@@ -131,6 +131,19 @@
     }
     .mdsp-right .markdown-body .mdsp-fm tr[data-changed="1"] td:first-child {
       box-shadow: inset 3px 0 0 var(--bgColor-success-emphasis, #238636);
+    }
+
+    /* 헤더 줄이 diff 밖이라 표로 파싱되지 않은 구간 — 점선으로 "잘린 표"임을 알린다 */
+    .mdsp-right .markdown-body .mdsp-table-part { border-collapse: collapse; }
+    .mdsp-right .markdown-body .mdsp-table-part caption {
+      caption-side: top; text-align: left; padding: 0 0 4px;
+      font-size: 11px; color: var(--fgColor-muted, #8b949e);
+    }
+    .mdsp-right .markdown-body .mdsp-table-part td {
+      border: 1px dashed var(--borderColor-default, #30363d);
+      padding: 5px 12px; vertical-align: top;
+      /* 열이 좁아져도 "단순" 같은 짧은 말이 글자 단위로 쪼개지지 않게 한다 */
+      word-break: keep-all;
     }
 
     .mdsp-gap {
@@ -334,6 +347,69 @@
     return `<div class="mdsp-block mdsp-fm" data-line="1"><table><tbody>${body}</tbody></table></div>`;
   }
 
+  // ── 표 조각 렌더 ─ 시작
+
+  /** `| a | b |` 처럼 파이프로 감싼 표 행. */
+  const TABLE_ROW = /^\s*\|.*\|\s*$/;
+  /** `|---|:--:|` 같은 헤더 구분선. */
+  const TABLE_DELIM = /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-*:?\s*\|?\s*$/;
+
+  /** 표 행 한 줄을 셀로 나눈다. `\|` 는 셀 안의 리터럴 파이프다. */
+  function splitTableRow(line) {
+    const t = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    const cells = [];
+    let cur = '';
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (c === '\\' && t[i + 1] === '|') { cur += '|'; i++; continue; }
+      if (c === '|') { cells.push(cur); cur = ''; continue; }
+      cur += c;
+    }
+    cells.push(cur);
+    return cells.map((s) => s.trim());
+  }
+
+  /**
+   * 표 한가운데 몇 줄만 diff 에 들어오면 헤더 줄과 구분선이 빠져 있어
+   * marked 가 문단으로 읽고 `| 셀 | 셀 |` 이 그대로 노출된다.
+   * 그런 구간을 찾아 셀로 되돌린다. 표 조각이 아니면 null.
+   */
+  function parseTableFragment(raw) {
+    const lines = raw.replace(/\s+$/, '').split('\n').filter((l) => l.trim());
+    if (!lines.length || !lines.every((l) => TABLE_ROW.test(l))) return null;
+
+    const rows = [];
+    for (const l of lines) {
+      if (TABLE_DELIM.test(l)) continue;   // 헤더는 접히고 구분선만 남은 경우
+      const cells = splitTableRow(l);
+      if (cells.length < 2) return null;   // 셀이 하나뿐이면 표로 보기 어렵다
+      rows.push(cells);
+    }
+    return rows.length ? rows : null;
+  }
+
+  /** 표 조각을 헤더 없는 표로 렌더링한다. 잘린 구간임을 캡션과 점선으로 알린다. */
+  function renderTableFragment(rows) {
+    const width = rows.reduce((max, r) => Math.max(max, r.length), 0);
+    const body = rows
+      .map((cells) => {
+        let tds = '';
+        for (let i = 0; i < width; i++) {
+          const src = cells[i] ?? '';
+          let cell;
+          try { cell = MD.parseInline(src); } catch { cell = escapeHtml(src); }
+          tds += `<td>${cell}</td>`;
+        }
+        return `<tr>${tds}</tr>`;
+      })
+      .join('');
+    return '<table class="mdsp-table-part">' +
+      '<caption>표 일부 · 헤더 줄이 diff 밖에 있습니다 (왼쪽에서 펼치면 표 전체로 보입니다)</caption>' +
+      `<tbody>${body}</tbody></table>`;
+  }
+
+  // ── 표 조각 렌더 ─ 끝
+
   /** 복원된 라인들을 렌더링한다. 각 블록에 원본 라인번호(data-line)가 붙는다. */
   function renderBlocks(lines) {
     if (!lines.length) return '<div class="mdsp-empty">렌더링할 마크다운 내용이 없습니다.</div>';
@@ -400,12 +476,19 @@
       }
 
       let html = '';
-      try {
-        const sub = [token];
-        sub.links = tokens.links || {};
-        html = applyAlerts(MD.parser(sub));
-      } catch {
-        html = `<pre>${escapeHtml(raw)}</pre>`;
+      const fragment = token.type === 'paragraph' || token.type === 'text'
+        ? parseTableFragment(raw)
+        : null;
+      if (fragment) {
+        html = renderTableFragment(fragment);
+      } else {
+        try {
+          const sub = [token];
+          sub.links = tokens.links || {};
+          html = applyAlerts(MD.parser(sub));
+        } catch {
+          html = `<pre>${escapeHtml(raw)}</pre>`;
+        }
       }
       if (!html.trim()) continue;
 
