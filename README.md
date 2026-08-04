@@ -76,7 +76,7 @@ GitHub이 diff를 React로 재작성하면서 예전 셀렉터(`data-code-marker
 
 - GitHub이 **접어둔 구간**은 diff DOM에 없어 렌더링에서도 빠집니다. 그 자리에 `⋯ 접힌 구간 ⋯` 배너가 표시되고, Expand를 누르면 자동으로 다시 렌더링됩니다.
 - mermaid 등 GitHub 전용 위젯은 코드블록 그대로 나옵니다.
-- YAML frontmatter는 GitHub처럼 표로 렌더링합니다. 단 diff에 1번 줄부터 포함돼 있을 때만 — 기존 파일 수정이라 frontmatter가 diff에 없으면 표를 만들 근거가 없습니다.
+- YAML frontmatter는 GitHub처럼 표로 렌더링합니다. 배열과 중첩 객체는 셀 안에 다시 표로 펴집니다(GitHub과 동일). 단 diff에 1번 줄부터 포함돼 있을 때만 — 기존 파일 수정이라 frontmatter가 diff에 없으면 표를 만들 근거가 없습니다. 앵커(`&a`)·복합 키처럼 지원 밖 YAML 문법이 섞이면 키/값 한 줄짜리 표로 물러납니다.
 
 ## 문제가 생기면
 
