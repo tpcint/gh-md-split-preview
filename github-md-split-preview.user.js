@@ -126,6 +126,24 @@
       color: var(--fgColor-muted, #8b949e);
       border-right: 1px solid var(--borderColor-muted, #21262d);
     }
+    /* 배열·중첩 객체는 셀 안에서 다시 표로 편다 */
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-sub {
+      display: table; width: auto; margin: 0; border-radius: 0;
+      border: 0; border-collapse: collapse;
+    }
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-sub td,
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-sub th,
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-sub td:first-child,
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-sub th:first-child {
+      width: auto; white-space: normal; padding: 3px 8px;
+      color: inherit; font-weight: 400; text-align: left;
+      border: 1px solid var(--borderColor-muted, #21262d);
+      box-shadow: none;
+    }
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-sub th,
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-sub th:first-child {
+      font-weight: 600; color: var(--fgColor-muted, #8b949e);
+    }
     .mdsp-right .markdown-body .mdsp-fm tr[data-changed="1"] {
       background: var(--bgColor-success-muted, rgba(46,160,67,.10));
     }
@@ -334,14 +352,258 @@
     return rows;
   }
 
+  // ── frontmatter YAML 파서 ─ 시작 (배열·중첩 객체를 GitHub 처럼 중첩 표로 편다)
+
+  const FM_MAX_DEPTH = 8;
+
+  /** 선행 공백 폭. 탭이 섞이면 -1 (들여쓰기 폭을 신뢰할 수 없어 파싱을 포기한다). */
+  function fmIndent(text) {
+    let i = 0;
+    while (text[i] === ' ') i++;
+    return text[i] === '\t' ? -1 : i;
+  }
+
+  /** 따옴표 밖의 ` #` 부터를 주석으로 잘라낸다. */
+  function fmStripComment(text) {
+    let quote = null;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (quote) {
+        if (c === '\\' && quote === '"') i++;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === '#' && (i === 0 || /\s/.test(text[i - 1]))) return text.slice(0, i);
+    }
+    return text;
+  }
+
+  /** 따옴표를 벗겨 표시용 문자열로 만든다. */
+  function fmScalar(raw) {
+    const t = raw.trim();
+    if (t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"') {
+      return t.slice(1, -1).replace(/\\(.)/g, (_m, c) => ({ n: '\n', t: '\t', r: '\r' }[c] ?? c));
+    }
+    if (t.length >= 2 && t[0] === "'" && t[t.length - 1] === "'") return t.slice(1, -1).replace(/''/g, "'");
+    return t;
+  }
+
+  /** `key: value` 를 분해한다. 키 꼴이 아니면 null. */
+  function fmSplitKey(text) {
+    let end = -1;
+    const q = text[0];
+    if (q === '"' || q === "'") {
+      for (let i = 1; i < text.length; i++) {
+        if (text[i] === '\\' && q === '"') { i++; continue; }
+        if (text[i] === q) { end = i + 1; break; }
+      }
+      if (end === -1 || text[end] !== ':') return null;
+    } else {
+      // `url: https://x` 처럼 값에 콜론이 있어도 되도록, 뒤가 공백/줄끝인 첫 콜론만 키 구분자로 본다
+      for (let i = 0; i < text.length; i++) {
+        if (text[i] === ':' && (i + 1 === text.length || /\s/.test(text[i + 1]))) { end = i; break; }
+      }
+      if (end <= 0 || /[[\]{},"']/.test(text.slice(0, end))) return null;
+    }
+    return { key: fmScalar(text.slice(0, end)), value: text.slice(end + 1).trim() };
+  }
+
+  /** `[a, b]` / `{k: v}` 같은 flow 표기를 노드로 만든다. 형식이 아니면 null. */
+  function fmParseFlow(src) {
+    if (src[0] !== '[' && src[0] !== '{') return null;
+    let p = 0;
+    const ws = () => { while (p < src.length && /\s/.test(src[p])) p++; };
+
+    const token = (stopColon) => {
+      const start = p;
+      let quote = null;
+      while (p < src.length) {
+        const c = src[p];
+        if (quote) {
+          if (c === '\\' && quote === '"') p++;
+          else if (c === quote) quote = null;
+        } else if ('[]{},'.includes(c) || (stopColon && c === ':')) break;
+        else if (c === '"' || c === "'") quote = c;
+        p++;
+      }
+      if (p === start) throw new Error('flow');
+      return src.slice(start, p);
+    };
+
+    const value = (depth) => {
+      if (depth > FM_MAX_DEPTH) throw new Error('deep');
+      ws();
+      if (src[p] === '[') { p++; return collection(depth, ']'); }
+      if (src[p] === '{') { p++; return collection(depth, '}'); }
+      return { type: 'scalar', text: fmScalar(token(false)) };
+    };
+
+    const collection = (depth, close) => {
+      const isMap = close === '}';
+      const items = [];
+      const entries = [];
+      const done = () => (isMap ? { type: 'map', entries } : { type: 'seq', items });
+      ws();
+      if (src[p] === close) { p++; return done(); }
+      for (;;) {
+        if (isMap) {
+          ws();
+          const key = token(true);
+          ws();
+          if (src[p] !== ':') throw new Error('flow');
+          p++;
+          entries.push({ key: fmScalar(key), node: value(depth + 1) });
+        } else {
+          items.push(value(depth + 1));
+        }
+        ws();
+        if (src[p] === ',') { p++; ws(); if (src[p] !== close) continue; }
+        if (src[p] !== close) throw new Error('flow');
+        p++;
+        return done();
+      }
+    };
+
+    try {
+      const node = value(0);
+      ws();
+      return p === src.length ? node : null;
+    } catch { return null; }
+  }
+
+  /**
+   * frontmatter 본문을 트리로 파싱한다. 최상위 키마다 { key, node, lines } 를 돌려준다.
+   * 지원: 블록 매핑/시퀀스, flow 표기, 따옴표·블록(`|` `>`) 스칼라, 주석.
+   * 지원 밖 문법을 만나면 null 을 돌려 호출부가 예전의 단순 key/value 표로 폴백하게 한다.
+   */
+  function parseFrontmatterTree(bodyLines) {
+    const src = bodyLines.map((l) => ({
+      indent: fmIndent(l.text), text: fmStripComment(l.text).trim(), raw: l.text,
+    }));
+    if (src.some((s) => s.indent < 0)) return null;
+    let i = 0;
+
+    const skipBlank = () => { while (i < src.length && !src[i].text) i++; };
+
+    function parseValue(indent, depth) {
+      if (depth > FM_MAX_DEPTH) throw new Error('deep');
+      skipBlank();
+      if (i >= src.length || src[i].indent < indent) return { type: 'scalar', text: '' };
+      return /^-(\s|$)/.test(src[i].text) ? parseSeq(src[i].indent, depth) : parseMap(src[i].indent, depth);
+    }
+
+    function parseMap(indent, depth) {
+      const entries = [];
+      for (;;) {
+        skipBlank();
+        if (i >= src.length || src[i].indent < indent) break;
+        if (src[i].indent > indent) throw new Error('indent');
+        const kv = fmSplitKey(src[i].text);
+        if (!kv) throw new Error('key');
+        const from = i;
+        i++;
+        const node = parseAfterKey(kv.value, indent, depth);
+        entries.push({ key: kv.key, node, from, to: i });
+      }
+      if (!entries.length) throw new Error('empty');
+      return { type: 'map', entries };
+    }
+
+    function parseAfterKey(value, indent, depth) {
+      if (/^[|>][+-]?\d*$/.test(value)) return parseBlockScalar(value[0] === '>', indent);
+      if (value) return fmParseFlow(value) || { type: 'scalar', text: fmScalar(value) };
+
+      // 값이 다음 줄부터인 경우
+      skipBlank();
+      if (i >= src.length) return { type: 'scalar', text: '' };
+      if (src[i].indent > indent) return parseValue(src[i].indent, depth + 1);
+      // 시퀀스는 부모 키와 같은 깊이로 쓰는 표기도 흔하다
+      if (src[i].indent === indent && /^-(\s|$)/.test(src[i].text)) return parseSeq(indent, depth + 1);
+      return { type: 'scalar', text: '' };
+    }
+
+    function parseBlockScalar(fold, indent) {
+      const buf = [];
+      let base = null;
+      while (i < src.length) {
+        const raw = src[i].raw;
+        if (!raw.trim()) { buf.push(''); i++; continue; }   // 블록 스칼라 안에서는 주석도 내용이다
+        if (fmIndent(raw) <= indent) break;
+        if (base === null) base = fmIndent(raw);
+        buf.push(raw.slice(base));
+        i++;
+      }
+      while (buf.length && !buf[buf.length - 1]) buf.pop();
+      return { type: 'scalar', text: fold ? buf.join(' ').trim() : buf.join('\n') };
+    }
+
+    function parseSeq(indent, depth) {
+      const items = [];
+      for (;;) {
+        skipBlank();
+        if (i >= src.length) break;
+        const cur = src[i];
+        if (cur.indent !== indent || !/^-(\s|$)/.test(cur.text)) break;
+
+        const rest = cur.text.slice(1).trim();
+        if (!rest) {
+          i++;
+          skipBlank();
+          items.push(i < src.length && src[i].indent > indent
+            ? parseValue(src[i].indent, depth + 1)
+            : { type: 'scalar', text: '' });
+          continue;
+        }
+        if (fmSplitKey(rest)) {
+          // `- key: value` 컴팩트 매핑 — 대시 뒤 컬럼을 그 매핑의 들여쓰기로 삼아 다음 줄들과 이어 읽는다
+          const off = cur.text.indexOf(rest, 1);
+          src[i] = { indent: indent + off, text: rest, raw: cur.raw };
+          items.push(parseMap(indent + off, depth + 1));
+          continue;
+        }
+        i++;
+        items.push(fmParseFlow(rest) || { type: 'scalar', text: fmScalar(rest) });
+      }
+      if (!items.length) throw new Error('empty');
+      return { type: 'seq', items };
+    }
+
+    try {
+      skipBlank();
+      if (i >= src.length || src[i].indent !== 0) return null;
+      const root = parseMap(0, 0);
+      if (i < src.length) return null;    // 다 읽지 못했으면 해석이 어긋난 것이다
+      return root.entries.map((e) => ({ key: e.key, node: e.node, lines: bodyLines.slice(e.from, e.to) }));
+    } catch { return null; }
+  }
+
+  /** 값 노드를 표로 렌더링한다. 시퀀스는 한 줄로, 매핑은 키 행 + 값 행으로 편다(GitHub 과 동일). */
+  function renderFmValue(node) {
+    if (!node) return '';
+    if (node.type === 'scalar') return escapeHtml(node.text).replace(/\n/g, '<br>');
+    if (node.type === 'seq') {
+      if (!node.items.length) return '';
+      return '<table class="mdsp-fm-sub"><tbody><tr>' +
+        node.items.map((v) => `<td>${renderFmValue(v)}</td>`).join('') +
+        '</tr></tbody></table>';
+    }
+    if (!node.entries.length) return '';
+    return '<table class="mdsp-fm-sub"><tbody>' +
+      `<tr>${node.entries.map((e) => `<th>${escapeHtml(e.key)}</th>`).join('')}</tr>` +
+      `<tr>${node.entries.map((e) => `<td>${renderFmValue(e.node)}</td>`).join('')}</tr>` +
+      '</tbody></table>';
+  }
+
+  // ── frontmatter YAML 파서 ─ 끝
+
   function renderFrontmatter(fm) {
-    const rows = parseFrontmatterRows(fm.body);
+    const rows = parseFrontmatterTree(fm.body) ||
+      parseFrontmatterRows(fm.body).map((r) => ({ key: r.key, node: { type: 'scalar', text: r.value }, lines: r.lines }));
     if (!rows.length) return '';
     const body = rows
       .map((r) => {
         const changed = r.lines.some((l) => l.added);
         return `<tr${changed ? ' data-changed="1"' : ''}>` +
-          `<td>${escapeHtml(r.key)}</td><td>${escapeHtml(r.value)}</td></tr>`;
+          `<td>${escapeHtml(r.key)}</td><td>${renderFmValue(r.node)}</td></tr>`;
       })
       .join('');
     return `<div class="mdsp-block mdsp-fm" data-line="1"><table><tbody>${body}</tbody></table></div>`;
