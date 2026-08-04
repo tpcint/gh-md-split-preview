@@ -18,7 +18,7 @@
 | [구독 결제](subscription.md) | 정기 결제 시작·해지 | payment, subscription | 복합 |
 | [백넘버 구매](back-number.md) | 지난 회차 단건 구매 | back-number, payment | 단순 |
 | [선물](gift.md) | 선물 보내기 | gift, payment | 단순 |
-| [룰렛](roulette.md) | 룰렛 플레이 | roulette, payment | 단순 |
+| [룰렛](roulette.md) | 룰렛 플레이 + 당첨 이력 | roulette, payment, history | 복합 |
 | [라이브](live.md) | 시청 + 방송 + 통화 | live, live-call, gift | 복합 |
 | [정산](payout.md) | 수익 확인·출금 신청 | payment, payout | 복합 |
 | [고객 문의](support.md) | 1:1 문의·FAQ | support | 단순 |
