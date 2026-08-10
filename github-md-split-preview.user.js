@@ -360,8 +360,9 @@
 
   /**
    * 여는 `---` 가 diff 밖인 조각을 frontmatter 로 인정할지 본다.
-   * 걸러야 할 것은 `제목: 부제` 뒤에 `---` 가 오는 setext heading 이다.
-   * 빈 줄이 없어야 하고, 그 하나로 끝나지 않는다는 근거(키가 여럿·중첩 값·YAML 앞머리)가 있어야 한다.
+   * 걸러야 할 것은 `제목: 부제` 뒤에 `---` 가 오는 setext heading 과, 콜론이 섞인 본문이다.
+   * 빈 줄이 없어야 하고, 키가 모두 YAML 식별자 꼴이어야 하며,
+   * 그 하나로 끝나지 않는다는 근거(키가 여럿·중첩 값·YAML 앞머리)가 있어야 한다.
    */
   function looksLikeFrontmatter(segments) {
     if (segments.some((seg) => seg.some((l) => !l.text.trim()))) return false;
@@ -369,6 +370,9 @@
     const { orphan, body } = splitOrphanHead(segments[0]);
     const rows = parseFrontmatterTree(body);
     if (!rows || !rows.length) return false;
+    // 표 조각(`| 항목`)·불릿 목록(`- 생년`)·산문도 `fmSplitKey` 는 키로 통과시킨다.
+    // 여는 `---` 가 없는 조각은 근거가 이것뿐이므로 키 꼴을 YAML 식별자로 좁힌다
+    if (!rows.every((r) => /^[A-Za-z0-9_.$-]+$/.test(r.key))) return false;
 
     return rows.length >= 2 ||
       rows.some((r) => r.node && r.node.type !== 'scalar') ||
@@ -387,6 +391,8 @@
     if (!lines.length) return null;
 
     const opened = lines[0].n === 1 && lines[0].text.trim() === '---';
+    // 1번 줄이 diff 에 있는데 `---` 가 아니면 이 파일엔 frontmatter 자체가 없다
+    if (!opened && lines[0].n === 1) return null;
     // 여는 `---` 가 없다면 파일 앞부분일 때만 frontmatter 조각으로 본다
     if (!opened && lines[0].n > FM_PARTIAL_MAX_LINE) return null;
 
