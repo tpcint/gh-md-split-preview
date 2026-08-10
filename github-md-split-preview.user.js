@@ -1260,7 +1260,7 @@
     if (view.note) {
       const changed = lines.filter((l) => l.added).length;
       // split diff 위에 2단을 얹으면 사실상 4단이 되어 너무 좁아진다
-      const isSplit = !!view.left.querySelector('td.diff-text-cell + td.diff-text-cell, td.left-side-diff-cell');
+      const isSplit = isSplitDiff(view.left);
       view.note.textContent =
         (lines.length ? `${lines.length}줄 · 추가 ${changed}줄` : '') +
         (isSplit ? '  ⚠︎ Unified diff 에서 보는 걸 권합니다' : '');
@@ -1388,10 +1388,32 @@
 
   let lastReport = '';
 
-  function scan() {
-    const files = document.querySelectorAll(
+  function findFileElements(root = document) {
+    const files = new Set(root.querySelectorAll(
       'div[id^="diff-"][class*="Diff-module__diffTargetable"], div.file[data-tagsearch-path], div.js-file'
-    );
+    ));
+
+    // 최신 React diff 는 파일 wrapper 에 id/data-path 없이 role=region 만 둔다.
+    // 실제 diff row 에서 aria-labelledby region 으로 올라가 파일 단위를 복원한다.
+    for (const row of root.querySelectorAll('tr.diff-line-row')) {
+      const region = row.closest('div[role="region"][aria-labelledby]');
+      if (region) files.add(region);
+    }
+    return [...files];
+  }
+
+  function isSplitDiff(root) {
+    for (const row of root.querySelectorAll('tr.diff-line-row, tr[class*=diff-line]')) {
+      const cells = [...row.querySelectorAll('td.diff-text-cell, td.blob-code')].filter(
+        (cell) => !cell.classList.contains('hunk') && !cell.classList.contains('blob-code-hunk')
+      );
+      if (cells.length > 1) return true;
+    }
+    return false;
+  }
+
+  function scan() {
+    const files = findFileElements();
     const tally = {};
     for (const el of files) {
       try {

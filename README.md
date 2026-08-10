@@ -66,7 +66,7 @@ GitHub이 diff를 React로 재작성하면서 예전 셀렉터(`data-code-marker
 
 | 용도 | 셀렉터 |
 |---|---|
-| 파일 컨테이너 | `div[id^="diff-"][class*="Diff-module__diffTargetable"]` |
+| 파일 컨테이너 | `tr.diff-line-row`에서 가장 가까운 `div[role="region"][aria-labelledby]` (기존 `div[id^="diff-"]` 폴백) |
 | 행 | `tr.diff-line-row` |
 | 텍스트 셀 | `td.diff-text-cell` (split이면 마지막이 변경 후) |
 | 순수 텍스트 | `.diff-text-inner` (마커 미포함) |
@@ -106,5 +106,5 @@ GitHub이 diff를 React로 재작성하면서 예전 셀렉터(`data-code-marker
 
 ```bash
 node --check github-md-split-preview.user.js
-node --test tests/fence-balancing.test.cjs
+node --test tests/*.test.cjs
 ```
