@@ -108,6 +108,19 @@ test('a visible file prefix survives frontmatter extraction', () => {
   assert.deepEqual(result.tail, [[4, '```']]);
 });
 
+test('a gap after visible frontmatter keeps a hidden opener eligible', () => {
+  const result = balance(
+    ['', 'changed();', '```', '', '# following'],
+    [null, 20, 21, 22, 23],
+    [20],
+    true,
+  );
+
+  assert.deepEqual(result.srcLines, ['', '```', 'changed();', '```', '', '# following']);
+  assert.deepEqual(result.head, [[1, '```']]);
+  assert.deepEqual(result.tail, []);
+});
+
 test('a shorter backtick run inside a complete longer fence stays content', () => {
   const original = ['````md', 'before', '```', 'changed();', '````', '', '# following document'];
   const result = balance([...original], [10, 11, 12, 13, 14, 15, 16], [13]);

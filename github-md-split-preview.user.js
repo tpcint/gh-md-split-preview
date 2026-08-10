@@ -1013,7 +1013,8 @@
     const lineNoOf = [];   // srcLines[i] 의 원본 라인번호(접힌 구간 자리는 null)
     const gapAfter = new Set();
 
-    let prev = null;
+    // frontmatter 뒤 첫 body hunk가 연속이 아니면 선행 gap도 펜스 방향 판단에 남긴다.
+    let prev = fm?.endLine ?? null;
     for (const l of lines) {
       if (prev !== null && l.n > prev + 1) {
         gapAfter.add(prev);
