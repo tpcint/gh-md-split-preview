@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub MD Split Preview
 // @namespace    https://github.com/lucidash
-// @version      2.5.0
+// @version      2.6.0
 // @description  GitHub PR/commit/compare의 변경 파일 화면에서 마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에 보여주고 스크롤을 동기화합니다.
 // @author       muzi
 // @homepageURL  https://github.com/tpcint/gh-md-split-preview
@@ -162,6 +162,14 @@
       padding: 5px 12px; vertical-align: top;
       /* 열이 좁아져도 "단순" 같은 짧은 말이 글자 단위로 쪼개지지 않게 한다 */
       word-break: keep-all;
+    }
+
+    /* 여는(또는 닫는) 펜스 줄이 diff 밖이라 채워 넣은 코드블록 — 점선으로 "잘린 구간"임을 알린다 */
+    .mdsp-right .markdown-body .mdsp-code-part .mdsp-part-note {
+      padding: 0 0 4px; font-size: 11px; color: var(--fgColor-muted, #8b949e);
+    }
+    .mdsp-right .markdown-body .mdsp-code-part pre {
+      border: 1px dashed var(--borderColor-default, #30363d);
     }
 
     .mdsp-gap {
@@ -672,6 +680,87 @@
 
   // ── 표 조각 렌더 ─ 끝
 
+  // ── 잘린 코드펜스 보정 ─ 시작
+
+  /**
+   * 코드펜스 한 줄이면 `{ marker, info }`, 아니면 null.
+   * info 가 비어 있으면 닫는 펜스가 될 수 있는 줄이다.
+   */
+  function fenceLine(text) {
+    const m = /^ {0,3}((?:`{3,})|(?:~{3,}))(.*)$/.exec(text);
+    if (!m) return null;
+    const info = m[2].trim();
+    // 백틱 펜스의 info string 에는 백틱이 들어갈 수 없다 (CommonMark)
+    if (m[1][0] === '`' && info.includes('`')) return null;
+    return { marker: m[1], info };
+  }
+
+  /**
+   * diff 조각에는 코드펜스의 한쪽만 들어오는 일이 잦다.
+   * 닫는 ``` 만 들어오면 marked 가 그걸 여는 펜스로 읽어 뒤따르는 문서 전체를
+   * 코드블록으로 삼켜버린다 (인용문·목록이 원문 그대로 노출된다).
+   *
+   * 접힌 구간을 경계로 조각마다 펜스 개수를 세어, 짝이 안 맞으면 모자란 쪽에
+   * 펜스를 채워 넣는다. srcLines / lineNoOf 를 제자리에서 바꾸고,
+   * 채워 넣은 자리를 `{ head, tail }`(인덱스 → 펜스 문자열)로 돌려준다.
+   */
+  function balanceFences(srcLines, lineNoOf) {
+    const head = new Map();   // 여는 펜스를 채운 자리 — 코드블록의 시작이 diff 밖
+    const tail = new Map();   // 닫는 펜스를 채운 자리 — 코드블록의 끝이 diff 밖
+
+    // 접힌 구간(lineNoOf 가 null 인 자리)을 경계로 조각을 나눈다
+    const segments = [];
+    let seg = null;
+    for (let i = 0; i < srcLines.length; i++) {
+      if (lineNoOf[i] == null) { seg = null; continue; }
+      if (seg) seg.end = i;
+      else segments.push((seg = { start: i, end: i }));
+    }
+
+    // 채워 넣을 자리를 먼저 모은다 (삽입하면서 세면 뒤 조각의 인덱스가 밀린다)
+    const plans = [];
+    for (const { start, end } of segments) {
+      const fences = [];
+      for (let i = start; i <= end; i++) {
+        const f = fenceLine(srcLines[i]);
+        if (f) fences.push({ i, ...f });
+      }
+      if (!fences.length || fences.length % 2 === 0) continue;   // 짝이 맞는다
+
+      const first = fences[0];
+      // 첫 펜스를 닫는 펜스로 볼 근거: 앞이 잘린 조각인데 언어 표기가 없고,
+      // 그 앞에 이미 내용(= 코드블록 안이었던 줄)이 있다.
+      const headCut = lineNoOf[start] > 1 &&
+        !first.info &&
+        srcLines.slice(start, first.i).some((l) => l.trim());
+
+      plans.push(headCut
+        ? { at: start, marker: first.marker, map: head }
+        : { at: end + 1, marker: fences[fences.length - 1].marker, map: tail });
+    }
+
+    // 앞에서부터 넣으면서 그만큼 뒤 자리를 민다
+    let shift = 0;
+    for (const p of plans) {
+      const at = p.at + shift;
+      srcLines.splice(at, 0, p.marker);
+      lineNoOf.splice(at, 0, null);
+      p.map.set(at, p.marker);
+      shift++;
+    }
+    return { head, tail };
+  }
+
+  /** 짝이 없어 채워 넣은 코드블록임을 안내와 점선으로 알린다. */
+  function renderCodePart(html, marker, where) {
+    return '<div class="mdsp-code-part">' +
+      `<div class="mdsp-part-note">코드블록 일부 · ${where} <code>${marker}</code> 줄이 diff 밖에 있습니다 ` +
+      '(왼쪽에서 펼치면 전체로 보입니다)</div>' +
+      `${html}</div>`;
+  }
+
+  // ── 잘린 코드펜스 보정 ─ 끝
+
   /** 복원된 라인들을 렌더링한다. 각 블록에 원본 라인번호(data-line)가 붙는다. */
   function renderBlocks(lines) {
     if (!lines.length) return '<div class="mdsp-empty">렌더링할 마크다운 내용이 없습니다.</div>';
@@ -704,6 +793,9 @@
     }
 
     const addedSet = new Set(lines.filter((l) => l.added).map((l) => l.n));
+
+    // 한쪽 펜스가 diff 밖인 코드블록을 먼저 닫아둔다 (안 그러면 뒤 문서를 통째로 삼킨다)
+    const cut = balanceFences(srcLines, lineNoOf);
 
     let tokens;
     try {
@@ -751,6 +843,10 @@
         } catch {
           html = `<pre>${escapeHtml(raw)}</pre>`;
         }
+      }
+      if (token.type === 'code') {
+        if (cut.head.has(start)) html = renderCodePart(html, cut.head.get(start), '여는');
+        else if (cut.tail.has(end)) html = renderCodePart(html, cut.tail.get(end), '닫는');
       }
       if (!html.trim()) continue;
 
