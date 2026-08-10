@@ -29,7 +29,7 @@ if [ ! -s "$OUT_DIR/delta.patch" ]; then
 fi
 
 python3 scripts/lint-docs.py --patch "$OUT_DIR/delta.patch"
-rm -f tmp/lint-baseline.txt tmp/lint-now.txt   # 다음 실행이 깨끗하도록
+rm -f tmp/lint-baseline.txt tmp/lint-now.txt tmp/delta.patch   # 다음 실행이 깨끗하도록
 ```
 
 > `.github` 는 두 디렉토리만 명시한다. 전체로 넓히면 `CODEOWNERS`·`dependabot.yml`
