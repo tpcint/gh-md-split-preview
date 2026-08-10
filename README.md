@@ -101,3 +101,10 @@ GitHub이 diff를 React로 재작성하면서 예전 셀렉터(`data-code-marker
 릴리스는 **`@version`을 올려서 `main`에 push**하면 끝입니다. Tampermonkey가 `@updateURL`을 주기적으로 확인해 각자에게 배포합니다. **버전을 올리지 않으면 업데이트가 감지되지 않습니다.**
 
 로컬에서 고칠 때는 Tampermonkey 대시보드에서 직접 편집하는 게 빠릅니다. 저장은 편집기의 **파일 → 저장** 메뉴를 쓰세요 (`Ctrl+S`는 동작하지 않습니다).
+
+코드펜스 보정 로직은 Node.js 내장 테스트 러너로 확인할 수 있습니다.
+
+```bash
+node --check github-md-split-preview.user.js
+node --test tests/fence-balancing.test.cjs
+```
