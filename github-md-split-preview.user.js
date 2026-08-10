@@ -890,8 +890,12 @@
           });
         }
 
-        // 현재 조각만으로 이미 닫혔다면 완전한 문서를 부분 블록으로 뒤집지 않는다.
-        const chosen = natural.open && !visibleOpener ? candidates[0] : natural;
+        // 파일 1번 줄 앞에는 숨은 opener 가 있을 수 없다. 그 밖의 잘린 조각만
+        // 변경 줄 점수로 방향을 고르고, 완전한 문서를 부분 블록으로 뒤집지 않는다.
+        const canHaveHiddenOpener = lineNoOf[scope.start] !== 1;
+        const chosen = natural.open && !visibleOpener && canHaveHiddenOpener
+          ? candidates[0]
+          : natural;
         for (const i of chosen.codeLines) protectedLines.add(i);
         if (chosen.initial) {
           plans.push({

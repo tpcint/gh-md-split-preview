@@ -83,6 +83,18 @@ test('a fence can interrupt changed prose without a blank', () => {
   assert.deepEqual(result.tail, [[3, '```']]);
 });
 
+test('a fragment starting at line one cannot have a hidden opener', () => {
+  const result = balance(
+    ['changed intro', '```', '', 'stable code'],
+    [1, 2, 3, 4],
+    [1],
+  );
+
+  assert.deepEqual(result.srcLines, ['changed intro', '```', '', 'stable code', '```']);
+  assert.deepEqual(result.head, []);
+  assert.deepEqual(result.tail, [[4, '```']]);
+});
+
 test('a shorter backtick run inside a complete longer fence stays content', () => {
   const original = ['````md', 'before', '```', 'changed();', '````', '', '# following document'];
   const result = balance([...original], [10, 11, 12, 13, 14, 15, 16], [13]);
