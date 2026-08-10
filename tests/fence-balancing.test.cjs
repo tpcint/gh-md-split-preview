@@ -198,6 +198,14 @@ test('a quote gap preserves the outer list container for a partial fence', () =>
   assert.deepEqual(result.inlineGapAfter, [1]);
 });
 
+test('a quote gap without a nested fence stays a separate render boundary', () => {
+  const original = ['> first', '', '> second'];
+  const result = balance([...original], [1, null, 20], [20]);
+
+  assert.deepEqual(result.srcLines, original);
+  assert.deepEqual(result.inlineGapAfter, []);
+});
+
 test('list fences pair after independently valid relative indentation', () => {
   const original = ['- item', '', '    ```js', '    changed', '     ```', '    following'];
   const result = balance([...original], [1, 2, 3, 4, 5, 6], [4]);

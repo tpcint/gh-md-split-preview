@@ -722,10 +722,11 @@
 
   const GAP_LABEL = '⋯ 접힌 구간 (왼쪽 diff에서 펼치면 반영됩니다) ⋯';
 
-  /** 같은 blockquote/list가 gap 양쪽에 이어지면 raw span으로 컨테이너를 보존한다. */
-  function preserveQuoteGap(srcLines, lineNoOf) {
+  /** fence 가 속한 blockquote/list gap만 raw span으로 바꿔 컨테이너를 보존한다. */
+  function preserveQuoteGaps(srcLines, lineNoOf, eligible) {
     const inlineGapAfter = new Set();
-    for (let i = 1; i < srcLines.length - 1; i++) {
+    for (const i of eligible) {
+      if (i < 1 || i >= srcLines.length - 1) continue;
       if (lineNoOf[i] != null || lineNoOf[i - 1] == null || lineNoOf[i + 1] == null) continue;
       const before = quoteLine(srcLines[i - 1]);
       const after = quoteLine(srcLines[i + 1]);
@@ -804,7 +805,7 @@
   function balanceFences(srcLines, lineNoOf, changedLines = new Set()) {
     const head = new Map();   // 여는 펜스를 채운 자리 — 코드블록의 시작이 diff 밖
     const tail = new Map();   // 닫는 펜스를 채운 자리 — 코드블록의 끝이 diff 밖
-    const inlineGapAfter = preserveQuoteGap(srcLines, lineNoOf);
+    const quoteGaps = new Set();
 
     // 접힌 구간(lineNoOf 가 null 인 자리)을 경계로 조각을 나눈다
     const segments = [];
@@ -824,6 +825,11 @@
         if (!f) continue;
         const list = findListContext(srcLines, lineNoOf, i, f);
         if (f.indent > 3 && !list) continue;
+        if (list && f.quoteDepth) {
+          for (let j = list.at + 1; j < i; j++) {
+            if (lineNoOf[j] == null) quoteGaps.add(j);
+          }
+        }
         const context = list
           ? `${f.quoteDepth}:list:${list.at}`
           : `${f.quoteDepth}:root`;
@@ -915,6 +921,8 @@
         }
       }
     }
+
+    const inlineGapAfter = preserveQuoteGaps(srcLines, lineNoOf, quoteGaps);
 
     // 앞에서부터 넣으면서 그만큼 뒤 자리를 민다
     plans.sort((a, b) => a.at - b.at);
