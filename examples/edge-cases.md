@@ -10,7 +10,7 @@ authors:
 nested:
   a:
     b:
-      c: 깊은 값
+      c: 더 깊은 값
 summary: |
   첫 줄
   둘째 줄

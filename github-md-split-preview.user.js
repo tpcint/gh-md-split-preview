@@ -150,6 +150,20 @@
     .mdsp-right .markdown-body .mdsp-fm tr[data-changed="1"] td:first-child {
       box-shadow: inset 3px 0 0 var(--bgColor-success-emphasis, #238636);
     }
+    /* 앞뒤 구분선이 diff 밖이라 일부만 살린 frontmatter — 점선으로 "잘린 표"임을 알린다 */
+    .mdsp-right .markdown-body .mdsp-fm caption {
+      caption-side: top; text-align: left; padding: 0 0 4px;
+      font-size: 11px; color: var(--fgColor-muted, #8b949e);
+    }
+    .mdsp-right .markdown-body .mdsp-fm-part table { border-style: dashed; }
+    /* 접힌 구간 안내 행 — 키 칸 스타일(좁은 폭·굵게)을 물려받지 않게 되돌린다 */
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-gap td,
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-gap td:first-child {
+      width: auto; white-space: normal; font-weight: 400; text-align: center;
+      font-size: 11px; color: var(--fgColor-muted, #8b949e); border-right: 0;
+    }
+    /* 부모 키가 diff 밖이라 값만 남은 앞머리 */
+    .mdsp-right .markdown-body .mdsp-fm .mdsp-fm-cut td:first-child { font-weight: 400; }
 
     /* 헤더 줄이 diff 밖이라 표로 파싱되지 않은 구간 — 점선으로 "잘린 표"임을 알린다 */
     .mdsp-right .markdown-body .mdsp-table-part { border-collapse: collapse; }
@@ -322,24 +336,122 @@
     );
   }
 
+  /** frontmatter 조각으로 인정할 최대 시작 라인. 이보다 아래에서 시작하면 본문으로 본다. */
+  const FM_PARTIAL_MAX_LINE = 40;
+
+  /** 조각을 frontmatter 로 인정할 최상위 키 꼴. 본문의 `- 항목`·`| 셀` 을 키로 읽지 않게 좁혀 둔다. */
+  const FM_KEY = /^[A-Za-z0-9_.$-]+$/;
+
+  /** 라인들을 접힌 구간 경계로 잘라 "번호가 이어지는 구간" 배열로 만든다. */
+  function splitSegments(lines) {
+    const segs = [];
+    for (const l of lines) {
+      const cur = segs[segs.length - 1];
+      if (cur && l.n === cur[cur.length - 1].n + 1) cur.push(l);
+      else segs.push([l]);
+    }
+    return segs;
+  }
+
+  /** 조각 앞머리의 "부모 키가 diff 밖인" 들여쓴 줄·시퀀스 항목을 떼어낸다. */
+  function splitOrphanHead(seg) {
+    let i = 0;
+    while (i < seg.length && (fmIndent(seg[i].text) > 0 || /^-(\s|$)/.test(seg[i].text.trim()))) i++;
+    return { orphan: seg.slice(0, i), body: seg.slice(i) };
+  }
+
+  /** 조각이 YAML 매핑으로 읽히는가. */
+  const fmParsable = (seg) => !!parseFrontmatterTree(splitOrphanHead(seg).body);
+
+  /**
+   * 첫 조각 뒤의 조각을 frontmatter 로 이어 볼 수 있는가.
+   * `looksLikeFrontmatter` 와 같은 근거(빈 줄 없음·키가 YAML 식별자 꼴)를 요구한다.
+   * 단 부모 키가 diff 밖이라 값만 남은 조각은 읽을 키가 없으므로 그대로 통과시킨다.
+   */
+  function fmSegmentOk(seg) {
+    if (seg.some((l) => !l.text.trim())) return false;
+    const body = splitOrphanHead(seg).body;
+    const rows = parseFrontmatterTree(body);
+    return rows ? rows.every((r) => FM_KEY.test(r.key)) : !body.length;
+  }
+
+  /** 앞머리 줄들이 YAML 조각처럼 생겼는가(시퀀스 항목이거나 `key: value`). */
+  const fmOrphanish = (lines) =>
+    lines.every((l) => {
+      const t = l.text.trim();
+      return /^-(\s|$)/.test(t) || !!fmSplitKey(t);
+    });
+
+  /**
+   * 여는 `---` 가 diff 밖인 조각을 frontmatter 로 인정할지 본다.
+   * 걸러야 할 것은 `제목: 부제` 뒤에 `---` 가 오는 setext heading 과, 콜론이 섞인 본문이다.
+   * 빈 줄이 없어야 하고, 키가 모두 YAML 식별자 꼴이어야 하며,
+   * 그 하나로 끝나지 않는다는 근거(키가 여럿·중첩 값·YAML 앞머리)가 있어야 한다.
+   */
+  function looksLikeFrontmatter(segments) {
+    if (segments.some((seg) => seg.some((l) => !l.text.trim()))) return false;
+
+    const { orphan, body } = splitOrphanHead(segments[0]);
+    const rows = parseFrontmatterTree(body);
+    if (!rows || !rows.length) return false;
+    // 표 조각(`| 항목`)·불릿 목록(`- 생년`)·산문도 `fmSplitKey` 는 키로 통과시킨다.
+    // 여는 `---` 가 없는 조각은 근거가 이것뿐이므로 키 꼴을 YAML 식별자로 좁힌다
+    if (!rows.every((r) => FM_KEY.test(r.key))) return false;
+
+    return rows.length >= 2 ||
+      rows.some((r) => r.node && r.node.type !== 'scalar') ||
+      (orphan.length > 0 && fmOrphanish(orphan));
+  }
+
   /**
    * 파일 맨 앞의 YAML frontmatter 구간을 떼어낸다.
    * marked 는 `---` 를 setext heading 으로 읽어 frontmatter 를 거대한 제목으로 만들기 때문에,
    * GitHub 처럼 표로 따로 렌더링한다.
+   *
+   * frontmatter 를 몇 줄만 고친 PR 은 여는/닫는 `---` 가 diff 밖으로 밀려나므로
+   * 남은 조각만이라도 표로 살린다. 사이에 접힌 구간이 있으면 조각마다 따로 읽는다.
    */
   function extractFrontmatter(lines) {
-    // 파일 1번 줄부터 시작하는 `---` 만 frontmatter 로 인정한다
-    if (!lines.length || lines[0].n !== 1 || lines[0].text.trim() !== '---') return null;
+    if (!lines.length) return null;
 
-    let close = -1;
-    for (let i = 1; i < lines.length; i++) {
-      // 접힌 구간이 끼어 있으면 닫는 줄을 신뢰할 수 없다
-      if (lines[i].n !== lines[i - 1].n + 1) return null;
-      if (lines[i].text.trim() === '---') { close = i; break; }
+    const opened = lines[0].n === 1 && lines[0].text.trim() === '---';
+    // 1번 줄이 diff 에 있는데 `---` 가 아니면 이 파일엔 frontmatter 자체가 없다
+    if (!opened && lines[0].n === 1) return null;
+    // 여는 `---` 가 없다면 파일 앞부분일 때만 frontmatter 조각으로 본다
+    if (!opened && lines[0].n > FM_PARTIAL_MAX_LINE) return null;
+
+    const segs = splitSegments(opened ? lines.slice(1) : lines);
+    const segments = [];
+    let rest = [];
+    let closed = false;
+
+    for (let s = 0; s < segs.length; s++) {
+      const seg = segs[s];
+      const at = seg.findIndex((l) => l.text.trim() === '---');
+      // 닫는 `---` 를 아직 못 봤다면, YAML 로 읽히는 조각까지만 frontmatter 로 본다
+      if (at === -1 && !fmParsable(seg)) { rest = segs.slice(s).flat(); break; }
+
+      const head = at === -1 ? seg : seg.slice(0, at);
+      // 첫 조각 뒤는 접힌 구간 너머의 본문 hunk 일 수 있다 — 같은 근거를 다시 요구한다
+      if (s > 0 && head.length && !fmSegmentOk(head)) { rest = segs.slice(s).flat(); break; }
+      if (head.length) segments.push(head);
+      if (at !== -1) {
+        closed = true;
+        rest = seg.slice(at + 1).concat(segs.slice(s + 1).flat());
+        break;
+      }
     }
-    if (close === -1) return null;
 
-    return { body: lines.slice(1, close), rest: lines.slice(close + 1), endLine: lines[close].n };
+    if (!segments.length) return null;
+    if (!opened && !looksLikeFrontmatter(segments)) return null;
+
+    return {
+      segments,
+      rest,
+      startLine: opened ? 1 : segments[0][0].n,
+      cutHead: !opened,
+      cutTail: !closed,
+    };
   }
 
   /** frontmatter 본문을 key/value 행으로 만든다. 들여쓴 줄은 직전 키의 값에 이어 붙인다. */
@@ -604,18 +716,43 @@
 
   // ── frontmatter YAML 파서 ─ 끝
 
+  const FM_GAP_ROW =
+    '<tr class="mdsp-fm-gap"><td colspan="2">⋯ 접힌 구간 (왼쪽 diff에서 펼치면 반영됩니다) ⋯</td></tr>';
+
+  /** 표 한 행. 추가된 줄이 섞여 있으면 초록으로 강조한다. */
+  function fmRow(key, value, lines, cls) {
+    const changed = lines.some((l) => l.added);
+    return `<tr${cls ? ` class="${cls}"` : ''}${changed ? ' data-changed="1"' : ''}>` +
+      `<td>${key}</td><td>${value}</td></tr>`;
+  }
+
+  /** 조각 하나를 표 행들로 만든다. 부모 키가 diff 밖인 앞머리는 값만 한 행에 모아 둔다. */
+  function renderFmSegment(seg) {
+    const { orphan, body } = splitOrphanHead(seg);
+    const rows = parseFrontmatterTree(body) ||
+      parseFrontmatterRows(body).map((r) => ({ key: r.key, node: { type: 'scalar', text: r.value }, lines: r.lines }));
+
+    const out = [];
+    if (orphan.length) {
+      const text = orphan.map((l) => escapeHtml(l.text.trim())).join('<br>');
+      out.push(fmRow('⋯', text, orphan, 'mdsp-fm-cut'));
+    }
+    for (const r of rows) out.push(fmRow(escapeHtml(r.key), renderFmValue(r.node), r.lines));
+    return out.join('');
+  }
+
   function renderFrontmatter(fm) {
-    const rows = parseFrontmatterTree(fm.body) ||
-      parseFrontmatterRows(fm.body).map((r) => ({ key: r.key, node: { type: 'scalar', text: r.value }, lines: r.lines }));
-    if (!rows.length) return '';
-    const body = rows
-      .map((r) => {
-        const changed = r.lines.some((l) => l.added);
-        return `<tr${changed ? ' data-changed="1"' : ''}>` +
-          `<td>${escapeHtml(r.key)}</td><td>${renderFmValue(r.node)}</td></tr>`;
-      })
-      .join('');
-    return `<div class="mdsp-block mdsp-fm" data-line="1"><table><tbody>${body}</tbody></table></div>`;
+    const body = fm.segments.map(renderFmSegment).filter(Boolean).join(FM_GAP_ROW);
+    if (!body) return '';
+
+    const where = fm.cutHead && fm.cutTail ? '앞뒤' : (fm.cutHead ? '시작' : '끝');
+    const partial = fm.cutHead || fm.cutTail;
+    const caption = partial
+      ? `<caption>frontmatter 일부 · ${where} 부분이 diff 밖에 있습니다 (왼쪽에서 펼치면 전체로 보입니다)</caption>`
+      : '';
+
+    return `<div class="mdsp-block mdsp-fm${partial ? ' mdsp-fm-part' : ''}" data-line="${fm.startLine}">` +
+      `<table>${caption}<tbody>${body}</tbody></table></div>`;
   }
 
   // ── 표 조각 렌더 ─ 시작

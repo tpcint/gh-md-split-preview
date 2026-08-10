@@ -16,7 +16,7 @@ platforms:
   android: "-"
   web: /poll/{pollId}
 status: active
-doc_status: draft
+doc_status: active
 ---
 
 # 투표 상세 화면
