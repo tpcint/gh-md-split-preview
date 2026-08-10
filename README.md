@@ -66,7 +66,7 @@ GitHub이 diff를 React로 재작성하면서 예전 셀렉터(`data-code-marker
 
 | 용도 | 셀렉터 |
 |---|---|
-| 파일 컨테이너 | `div[id^="diff-"][class*="Diff-module__diffTargetable"]` |
+| 파일 컨테이너 | `tr.diff-line-row`에서 가장 가까운 `div[role="region"][aria-labelledby]` (기존 `div[id^="diff-"]` 폴백) |
 | 행 | `tr.diff-line-row` |
 | 텍스트 셀 | `td.diff-text-cell` (split이면 마지막이 변경 후) |
 | 순수 텍스트 | `.diff-text-inner` (마커 미포함) |
@@ -76,6 +76,7 @@ GitHub이 diff를 React로 재작성하면서 예전 셀렉터(`data-code-marker
 
 - GitHub이 **접어둔 구간**은 diff DOM에 없어 렌더링에서도 빠집니다. 그 자리에 `⋯ 접힌 구간 ⋯` 배너가 표시되고, Expand를 누르면 자동으로 다시 렌더링됩니다.
 - 행이 많은 표에서 **몇 줄만 바뀌면 헤더 줄과 `|---|` 구분선이 diff 밖에 있어** 마크다운 문법상 표가 아닙니다. 이럴 때는 셀만 끊어 **점선 표**로 보여주고 `표 일부` 라고 알립니다. 헤더까지 갖춘 진짜 표로 보려면 왼쪽 diff에서 위쪽 구간을 펼치세요.
+- 코드블록도 마찬가지로 **여는 ```` ``` ````가 diff 밖에 있으면** 남은 닫는 줄이 "여는 펜스"로 읽혀 뒤따르는 문서 전체를 코드로 삼켰습니다. 이제 접힌 구간을 경계로 조각마다 펜스 짝을 맞춰 그 자리에서 닫고, 점선 테두리와 `코드블록 일부` 안내를 붙입니다. 여는·닫는 줄이 **둘 다** diff 밖이면(코드블록 한가운데만 바뀐 경우) 코드인 줄 알 방법이 없어 일반 텍스트로 나옵니다.
 - mermaid 등 GitHub 전용 위젯은 코드블록 그대로 나옵니다.
 - YAML frontmatter는 GitHub처럼 표로 렌더링합니다. 배열과 중첩 객체는 셀 안에 다시 표로 펴집니다(GitHub과 동일). 단 diff에 1번 줄부터 포함돼 있을 때만 — 기존 파일 수정이라 frontmatter가 diff에 없으면 표를 만들 근거가 없습니다. 앵커(`&a`)·복합 키처럼 지원 밖 YAML 문법이 섞이면 키/값 한 줄짜리 표로 물러납니다.
 
@@ -100,3 +101,10 @@ GitHub이 diff를 React로 재작성하면서 예전 셀렉터(`data-code-marker
 릴리스는 **`@version`을 올려서 `main`에 push**하면 끝입니다. Tampermonkey가 `@updateURL`을 주기적으로 확인해 각자에게 배포합니다. **버전을 올리지 않으면 업데이트가 감지되지 않습니다.**
 
 로컬에서 고칠 때는 Tampermonkey 대시보드에서 직접 편집하는 게 빠릅니다. 저장은 편집기의 **파일 → 저장** 메뉴를 쓰세요 (`Ctrl+S`는 동작하지 않습니다).
+
+코드펜스 보정 로직은 Node.js 내장 테스트 러너로 확인할 수 있습니다.
+
+```bash
+node --check github-md-split-preview.user.js
+node --test tests/*.test.cjs
+```

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub MD Split Preview
 // @namespace    https://github.com/lucidash
-// @version      2.5.0
+// @version      2.6.0
 // @description  GitHub PR/commit/compare의 변경 파일 화면에서 마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에 보여주고 스크롤을 동기화합니다.
 // @author       muzi
 // @homepageURL  https://github.com/tpcint/gh-md-split-preview
@@ -164,7 +164,16 @@
       word-break: keep-all;
     }
 
+    /* 여는(또는 닫는) 펜스 줄이 diff 밖이라 채워 넣은 코드블록 — 점선으로 "잘린 구간"임을 알린다 */
+    .mdsp-right .markdown-body .mdsp-code-part .mdsp-part-note {
+      padding: 0 0 4px; font-size: 11px; color: var(--fgColor-muted, #8b949e);
+    }
+    .mdsp-right .markdown-body .mdsp-code-part pre {
+      border: 1px dashed var(--borderColor-default, #30363d);
+    }
+
     .mdsp-gap {
+      display: block;
       margin: 14px 0; padding: 3px 0; text-align: center; font-size: 11px;
       color: var(--fgColor-muted, #8b949e);
       border-top: 1px dashed var(--borderColor-muted, #21262d);
@@ -672,11 +681,324 @@
 
   // ── 표 조각 렌더 ─ 끝
 
+  // ── 잘린 코드펜스 보정 ─ 시작
+
+  /** 코드펜스 한 줄이면 marker 와 컨테이너 prefix 를, 아니면 null 을 돌려준다. */
+  function fenceLine(text) {
+    let rest = text;
+    let quotePrefix = '';
+    let quoteDepth = 0;
+    for (;;) {
+      const q = /^ {0,3}>[ \t]?/.exec(rest);
+      if (!q) break;
+      quotePrefix += q[0];
+      rest = rest.slice(q[0].length);
+      quoteDepth++;
+    }
+
+    const m = /^( *)((?:`{3,})|(?:~{3,}))(.*)$/.exec(rest);
+    if (!m) return null;
+    const info = m[3].trim();
+    // 백틱 펜스의 info string 에는 백틱이 들어갈 수 없다 (CommonMark)
+    if (m[2][0] === '`' && info.includes('`')) return null;
+    return {
+      marker: m[2], info, quoteDepth, indent: m[1].length,
+      prefix: quotePrefix + m[1],
+    };
+  }
+
+  /** blockquote marker 를 걷어낸 뒤의 내용과 깊이. */
+  function quoteLine(text) {
+    let rest = text;
+    let depth = 0;
+    for (;;) {
+      const q = /^ {0,3}>[ \t]?/.exec(rest);
+      if (!q) break;
+      rest = rest.slice(q[0].length);
+      depth++;
+    }
+    return { depth, rest };
+  }
+
+  const GAP_LABEL = '⋯ 접힌 구간 (왼쪽 diff에서 펼치면 반영됩니다) ⋯';
+
+  /** fence 가 속한 blockquote/list gap만 raw span으로 바꿔 컨테이너를 보존한다. */
+  function preserveQuoteGaps(srcLines, lineNoOf, eligible) {
+    const inlineGapAfter = new Set();
+    for (const i of eligible) {
+      if (i < 1 || i >= srcLines.length - 1) continue;
+      if (lineNoOf[i] != null || lineNoOf[i - 1] == null || lineNoOf[i + 1] == null) continue;
+      const before = quoteLine(srcLines[i - 1]);
+      const after = quoteLine(srcLines[i + 1]);
+      if (!before.depth || before.depth !== after.depth) continue;
+      const quotePrefix = `${Array(before.depth).fill('>').join(' ')} `;
+      const indent = /^ */.exec(after.rest)[0];
+      srcLines[i] = quotePrefix + indent + `<span class="mdsp-gap">${GAP_LABEL}</span>`;
+      inlineGapAfter.add(lineNoOf[i - 1]);
+    }
+    return inlineGapAfter;
+  }
+
+  /** fence 를 감싸는 가장 가까운 목록 marker 와 content 들여쓰기를 찾는다. */
+  function findListContext(srcLines, lineNoOf, at, fence) {
+    if (!fence.indent) return null;
+    for (let i = at - 1; i >= 0; i--) {
+      if (lineNoOf[i] == null) continue;
+      const line = quoteLine(srcLines[i]);
+      if (line.depth !== fence.quoteDepth) return null;
+      if (!line.rest.trim()) continue;
+      const indent = /^ */.exec(line.rest)[0].length;
+      const list = /^( *)([-+*]|\d{1,9}[.)])( {1,4})/.exec(line.rest);
+      if (list) {
+        const contentIndent = list[1].length + list[2].length + list[3].length;
+        const relative = fence.indent - contentIndent;
+        if (relative >= 0 && relative <= 3) return { at: i, contentIndent };
+      }
+      if (indent === 0) return null;
+    }
+    return null;
+  }
+
+  function closesFence(open, fence) {
+    return fence && !fence.info &&
+      fence.context === open.context &&
+      fence.marker[0] === open.marker[0] &&
+      fence.marker.length >= open.marker.length;
+  }
+
+  /** 주어진 시작 상태로 scope 를 읽고 changed line 이 코드 안에 드는 정도를 센다. */
+  function scoreFenceRun(scope, fences, lineNoOf, changedLines, initial) {
+    const fenceAt = new Map(fences.map((f) => [f.i, f]));
+    let open = initial ? { ...initial } : null;
+    let inside = 0;
+    let outside = 0;
+    const codeLines = new Set();
+
+    for (let i = scope.start; i <= scope.end; i++) {
+      const fence = fenceAt.get(i);
+      const changed = changedLines.has(lineNoOf[i]);
+      if (open) {
+        codeLines.add(i);
+        if (changed) inside++;
+        if (closesFence(open, fence)) open = null;
+      } else if (fence) {
+        open = { ...fence };
+        codeLines.add(i);
+        if (changed) inside++;
+      } else if (changed) {
+        outside++;
+      }
+    }
+
+    return { initial, open, score: inside * 2 - outside, codeLines };
+  }
+
+  /**
+   * diff 조각에는 코드펜스의 한쪽만 들어오는 일이 잦다.
+   * 닫는 ``` 만 들어오면 marked 가 그걸 여는 펜스로 읽어 뒤따르는 문서 전체를
+   * 코드블록으로 삼켜버린다 (인용문·목록이 원문 그대로 노출된다).
+   *
+   * 접힌 구간을 경계로 조각마다 실제 CommonMark marker 쌍을 추적하고, 변경 줄이
+   * 코드 안에 놓이는 방향을 택해 모자란 펜스를 채운다. srcLines / lineNoOf 를 바꾸고,
+   * 채워 넣은 자리를 `{ head, tail }`(인덱스 → 펜스 문자열)로 돌려준다.
+   */
+  function balanceFences(
+    srcLines,
+    lineNoOf,
+    changedLines = new Set(),
+    startsAtFileBeginning = lineNoOf[0] === 1,
+  ) {
+    const head = new Map();   // 여는 펜스를 채운 자리 — 코드블록의 시작이 diff 밖
+    const tail = new Map();   // 닫는 펜스를 채운 자리 — 코드블록의 끝이 diff 밖
+    const quoteGaps = new Set();
+
+    // 접힌 구간(lineNoOf 가 null 인 자리)을 경계로 조각을 나눈다
+    const segments = [];
+    let seg = null;
+    for (let i = 0; i < srcLines.length; i++) {
+      if (lineNoOf[i] == null) { seg = null; continue; }
+      if (seg) seg.end = i;
+      else segments.push((seg = { start: i, end: i }));
+    }
+
+    // 채워 넣을 자리를 먼저 모은다 (삽입하면서 세면 뒤 조각의 인덱스가 밀린다).
+    const plans = [];
+    for (const { start, end } of segments) {
+      const fences = [];
+      for (let i = start; i <= end; i++) {
+        const f = fenceLine(srcLines[i]);
+        if (!f) continue;
+        const list = findListContext(srcLines, lineNoOf, i, f);
+        if (f.indent > 3 && !list) continue;
+        if (list && f.quoteDepth) {
+          for (let j = list.at + 1; j < i; j++) {
+            if (lineNoOf[j] == null) quoteGaps.add(j);
+          }
+        }
+        const context = list
+          ? `${f.quoteDepth}:list:${list.at}`
+          : `${f.quoteDepth}:root`;
+        fences.push({ i, ...f, list, context });
+      }
+      if (!fences.length) continue;
+
+      // 최상위 / blockquote / list continuation 별로 독립된 fence run 을 만든다.
+      const scopes = new Map();
+      for (const fence of fences) {
+        let scopeStart = start;
+        let scopeEnd = end;
+        if (fence.quoteDepth) {
+          scopeStart = fence.i;
+          while (scopeStart > start && quoteLine(srcLines[scopeStart - 1]).depth >= fence.quoteDepth) scopeStart--;
+          scopeEnd = fence.i;
+          while (scopeEnd < end && quoteLine(srcLines[scopeEnd + 1]).depth >= fence.quoteDepth) scopeEnd++;
+        }
+        const key = `${fence.context}:${scopeStart}:${scopeEnd}`;
+        const scope = scopes.get(key) || {
+          start: scopeStart, end: scopeEnd, fences: [],
+          rank: fence.quoteDepth * 100 + (fence.list ? 1 : 0),
+        };
+        scope.fences.push(fence);
+        scopes.set(key, scope);
+      }
+
+      const protectedLines = new Set();
+      const orderedScopes = [...scopes.values()].sort((a, b) =>
+        a.start - b.start || a.rank - b.rank || b.end - a.end);
+      for (const scope of orderedScopes) {
+        scope.fences = scope.fences.filter((fence) => !protectedLines.has(fence.i));
+        if (!scope.fences.length) continue;
+        const natural = scoreFenceRun(scope, scope.fences, lineNoOf, changedLines, null);
+        const candidates = [natural];
+        for (const fence of scope.fences) {
+          if (fence.info) continue;
+          candidates.push(scoreFenceRun(scope, scope.fences, lineNoOf, changedLines, {
+            marker: fence.marker, prefix: fence.prefix, context: fence.context,
+          }));
+        }
+
+        const first = scope.fences[0];
+        const fallbackHead = !first.info && first.i > scope.start &&
+          srcLines[first.i - 1].trim() &&
+          srcLines.slice(scope.start, first.i).some((line) => line.trim());
+        const previous = first.i > scope.start ? quoteLine(srcLines[first.i - 1]) : null;
+        const next = first.i < scope.end ? quoteLine(srcLines[first.i + 1]) : null;
+        const blankBefore = previous && previous.depth === first.quoteDepth && !previous.rest.trim();
+        const contentAfter = scope.fences.length === 1 && !first.list && first.quoteDepth === 0 &&
+          next && next.depth === first.quoteDepth && next.rest.trim();
+        const visibleOpener = first.info || blankBefore || contentAfter;
+        if (natural.open && !visibleOpener) {
+          candidates.sort((a, b) => {
+            if (a.score !== b.score) return b.score - a.score;
+            const aBias = (!a.initial && first.info) || (a.initial && fallbackHead) ? 1 : 0;
+            const bBias = (!b.initial && first.info) || (b.initial && fallbackHead) ? 1 : 0;
+            if (aBias !== bBias) return bBias - aBias;
+            const aSynthetic = (a.initial ? 1 : 0) + (a.open ? 1 : 0);
+            const bSynthetic = (b.initial ? 1 : 0) + (b.open ? 1 : 0);
+            if (aSynthetic !== bSynthetic) return aSynthetic - bSynthetic;
+            if (!!a.initial !== !!b.initial) return a.initial ? 1 : -1;
+            return 0;   // 애매하면 앞 문서를 코드로 뒤집지 않는다
+          });
+        }
+
+        // 파일 1번 줄 앞에는 숨은 opener 가 있을 수 없다. 그 밖의 잘린 조각만
+        // 변경 줄 점수로 방향을 고르고, 완전한 문서를 부분 블록으로 뒤집지 않는다.
+        const canHaveHiddenOpener = lineNoOf[scope.start] !== 1 &&
+          !(startsAtFileBeginning && start === 0);
+        const chosen = natural.open && !visibleOpener && canHaveHiddenOpener
+          ? candidates[0]
+          : natural;
+        for (const i of chosen.codeLines) protectedLines.add(i);
+        if (chosen.initial) {
+          plans.push({
+            at: scope.start,
+            line: chosen.initial.prefix + chosen.initial.marker,
+            marker: chosen.initial.marker,
+            map: head,
+          });
+        }
+        if (chosen.open) {
+          plans.push({
+            at: scope.end + 1,
+            line: chosen.open.prefix + chosen.open.marker,
+            marker: chosen.open.marker,
+            map: tail,
+          });
+        }
+      }
+    }
+
+    const inlineGapAfter = preserveQuoteGaps(srcLines, lineNoOf, quoteGaps);
+
+    // 앞에서부터 넣으면서 그만큼 뒤 자리를 민다
+    plans.sort((a, b) => a.at - b.at);
+    let shift = 0;
+    for (const p of plans) {
+      const at = p.at + shift;
+      srcLines.splice(at, 0, p.line);
+      lineNoOf.splice(at, 0, null);
+      p.map.set(at, p.marker);
+      shift++;
+    }
+    return { head, tail, inlineGapAfter };
+  }
+
+  /** 중첩 blockquote/list token 안에 들어간 합성 fence 도 찾는다. */
+  function cutInRange(map, start, end) {
+    for (const [at, marker] of map) {
+      if (at >= start && at <= end) return { at, marker };
+    }
+    return null;
+  }
+
+  function cutMarkerInRange(map, start, end) {
+    return cutInRange(map, start, end)?.marker ?? null;
+  }
+
+  function countCodeTokens(tokens) {
+    let count = 0;
+    const visit = (token) => {
+      if (token.type === 'code') count++;
+      for (const child of token.tokens || []) visit(child);
+      for (const item of token.items || []) {
+        for (const child of item.tokens || []) visit(child);
+      }
+    };
+    for (const token of tokens || []) visit(token);
+    return count;
+  }
+
+  function findCodeToken(tokens, ordinal) {
+    let seen = 0;
+    let found = null;
+    const visit = (token) => {
+      if (found) return;
+      if (token.type === 'code' && ++seen === ordinal) { found = token; return; }
+      for (const child of token.tokens || []) visit(child);
+      for (const item of token.items || []) {
+        for (const child of item.tokens || []) visit(child);
+      }
+    };
+    for (const token of tokens || []) visit(token);
+    return found;
+  }
+
+  /** marked 가 방금 렌더한 fenced-code HTML 하나에 안내와 점선을 붙인다. */
+  function renderCodePart(html, marker, where) {
+    const note =
+      `<div class="mdsp-part-note">코드블록 일부 · ${where} <code>${marker}</code> 줄이 diff 밖에 있습니다 ` +
+      '(왼쪽에서 펼치면 전체로 보입니다)</div>';
+    return '<div class="mdsp-code-part">' + note + html + '</div>';
+  }
+
+  // ── 잘린 코드펜스 보정 ─ 끝
+
   /** 복원된 라인들을 렌더링한다. 각 블록에 원본 라인번호(data-line)가 붙는다. */
   function renderBlocks(lines) {
     if (!lines.length) return '<div class="mdsp-empty">렌더링할 마크다운 내용이 없습니다.</div>';
 
     const out = [];
+    const startsAtFileBeginning = lines[0].n === 1;
 
     // frontmatter 를 먼저 표로 뽑아내고, 나머지 본문만 마크다운으로 렌더링한다
     const fm = extractFrontmatter(lines);
@@ -691,7 +1013,8 @@
     const lineNoOf = [];   // srcLines[i] 의 원본 라인번호(접힌 구간 자리는 null)
     const gapAfter = new Set();
 
-    let prev = null;
+    // frontmatter 뒤 첫 body hunk가 연속이 아니면 선행 gap도 펜스 방향 판단에 남긴다.
+    let prev = fm?.endLine ?? null;
     for (const l of lines) {
       if (prev !== null && l.n > prev + 1) {
         gapAfter.add(prev);
@@ -704,6 +1027,10 @@
     }
 
     const addedSet = new Set(lines.filter((l) => l.added).map((l) => l.n));
+
+    // 한쪽 펜스가 diff 밖인 코드블록을 먼저 닫아둔다 (안 그러면 뒤 문서를 통째로 삼킨다)
+    const cut = balanceFences(srcLines, lineNoOf, addedSet, startsAtFileBeginning);
+    for (const n of cut.inlineGapAfter) gapAfter.delete(n);
 
     let tokens;
     try {
@@ -737,6 +1064,17 @@
         if (addedSet.has(n)) changed = true;
       }
 
+      const headCut = cutInRange(cut.head, start, end);
+      const tailCut = cutInRange(cut.tail, start, end);
+      const codeCut = headCut || tailCut;
+      let partToken = null;
+      if (codeCut) {
+        try {
+          const prefix = MD.lexer(srcLines.slice(start, codeCut.at + 1).join('\n'));
+          partToken = findCodeToken([token], countCodeTokens(prefix));
+        } catch { /* 본문 렌더는 유지하고 부분 안내만 생략한다 */ }
+      }
+
       let html = '';
       const fragment = token.type === 'paragraph' || token.type === 'text'
         ? parseTableFragment(raw)
@@ -747,7 +1085,19 @@
         try {
           const sub = [token];
           sub.links = tokens.links || {};
-          html = applyAlerts(MD.parser(sub));
+          if (partToken) {
+            const renderer = new MD.Renderer();
+            const renderCode = renderer.code;
+            renderer.code = function (codeToken) {
+              const rendered = renderCode.call(this, codeToken);
+              return codeToken === partToken
+                ? renderCodePart(rendered, codeCut.marker, headCut ? '여는' : '닫는')
+                : rendered;
+            };
+            html = applyAlerts(MD.parser(sub, { renderer }));
+          } else {
+            html = applyAlerts(MD.parser(sub));
+          }
         } catch {
           html = `<pre>${escapeHtml(raw)}</pre>`;
         }
@@ -760,7 +1110,7 @@
       );
 
       if (endLine != null && gapAfter.has(endLine)) {
-        out.push('<div class="mdsp-gap">⋯ 접힌 구간 (왼쪽 diff에서 펼치면 반영됩니다) ⋯</div>');
+        out.push(`<div class="mdsp-gap">${GAP_LABEL}</div>`);
         gapAfter.delete(endLine);
       }
     }
@@ -910,7 +1260,7 @@
     if (view.note) {
       const changed = lines.filter((l) => l.added).length;
       // split diff 위에 2단을 얹으면 사실상 4단이 되어 너무 좁아진다
-      const isSplit = !!view.left.querySelector('td.diff-text-cell + td.diff-text-cell, td.left-side-diff-cell');
+      const isSplit = isSplitDiff(view.left);
       view.note.textContent =
         (lines.length ? `${lines.length}줄 · 추가 ${changed}줄` : '') +
         (isSplit ? '  ⚠︎ Unified diff 에서 보는 걸 권합니다' : '');
@@ -1038,10 +1388,32 @@
 
   let lastReport = '';
 
-  function scan() {
-    const files = document.querySelectorAll(
+  function findFileElements(root = document) {
+    const files = new Set(root.querySelectorAll(
       'div[id^="diff-"][class*="Diff-module__diffTargetable"], div.file[data-tagsearch-path], div.js-file'
-    );
+    ));
+
+    // 최신 React diff 는 파일 wrapper 에 id/data-path 없이 role=region 만 둔다.
+    // 실제 diff row 에서 aria-labelledby region 으로 올라가 파일 단위를 복원한다.
+    for (const row of root.querySelectorAll('tr.diff-line-row')) {
+      const region = row.closest('div[role="region"][aria-labelledby]');
+      if (region) files.add(region);
+    }
+    return [...files];
+  }
+
+  function isSplitDiff(root) {
+    for (const row of root.querySelectorAll('tr.diff-line-row, tr[class*=diff-line]')) {
+      const cells = [...row.querySelectorAll('td.diff-text-cell, td.blob-code')].filter(
+        (cell) => !cell.classList.contains('hunk') && !cell.classList.contains('blob-code-hunk')
+      );
+      if (cells.length > 1) return true;
+    }
+    return false;
+  }
+
+  function scan() {
+    const files = findFileElements();
     const tally = {};
     for (const el of files) {
       try {
