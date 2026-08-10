@@ -24,8 +24,8 @@ vm.runInNewContext(
 );
 const { balanceFences, cutMarkerInRange, renderCodePart, findCodeToken } = sandbox.helpers;
 
-function balance(srcLines, lineNoOf, changedLines) {
-  const cut = balanceFences(srcLines, lineNoOf, new Set(changedLines));
+function balance(srcLines, lineNoOf, changedLines, startsAtFileBeginning) {
+  const cut = balanceFences(srcLines, lineNoOf, new Set(changedLines), startsAtFileBeginning);
   return {
     srcLines,
     lineNoOf,
@@ -88,6 +88,19 @@ test('a fragment starting at line one cannot have a hidden opener', () => {
     ['changed intro', '```', '', 'stable code'],
     [1, 2, 3, 4],
     [1],
+  );
+
+  assert.deepEqual(result.srcLines, ['changed intro', '```', '', 'stable code', '```']);
+  assert.deepEqual(result.head, []);
+  assert.deepEqual(result.tail, [[4, '```']]);
+});
+
+test('a visible file prefix survives frontmatter extraction', () => {
+  const result = balance(
+    ['changed intro', '```', '', 'stable code'],
+    [4, 5, 6, 7],
+    [4],
+    true,
   );
 
   assert.deepEqual(result.srcLines, ['changed intro', '```', '', 'stable code', '```']);

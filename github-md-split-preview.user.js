@@ -802,7 +802,12 @@
    * 코드 안에 놓이는 방향을 택해 모자란 펜스를 채운다. srcLines / lineNoOf 를 바꾸고,
    * 채워 넣은 자리를 `{ head, tail }`(인덱스 → 펜스 문자열)로 돌려준다.
    */
-  function balanceFences(srcLines, lineNoOf, changedLines = new Set()) {
+  function balanceFences(
+    srcLines,
+    lineNoOf,
+    changedLines = new Set(),
+    startsAtFileBeginning = lineNoOf[0] === 1,
+  ) {
     const head = new Map();   // 여는 펜스를 채운 자리 — 코드블록의 시작이 diff 밖
     const tail = new Map();   // 닫는 펜스를 채운 자리 — 코드블록의 끝이 diff 밖
     const quoteGaps = new Set();
@@ -898,7 +903,8 @@
 
         // 파일 1번 줄 앞에는 숨은 opener 가 있을 수 없다. 그 밖의 잘린 조각만
         // 변경 줄 점수로 방향을 고르고, 완전한 문서를 부분 블록으로 뒤집지 않는다.
-        const canHaveHiddenOpener = lineNoOf[scope.start] !== 1;
+        const canHaveHiddenOpener = lineNoOf[scope.start] !== 1 &&
+          !(startsAtFileBeginning && start === 0);
         const chosen = natural.open && !visibleOpener && canHaveHiddenOpener
           ? candidates[0]
           : natural;
@@ -992,6 +998,7 @@
     if (!lines.length) return '<div class="mdsp-empty">렌더링할 마크다운 내용이 없습니다.</div>';
 
     const out = [];
+    const startsAtFileBeginning = lines[0].n === 1;
 
     // frontmatter 를 먼저 표로 뽑아내고, 나머지 본문만 마크다운으로 렌더링한다
     const fm = extractFrontmatter(lines);
@@ -1021,7 +1028,7 @@
     const addedSet = new Set(lines.filter((l) => l.added).map((l) => l.n));
 
     // 한쪽 펜스가 diff 밖인 코드블록을 먼저 닫아둔다 (안 그러면 뒤 문서를 통째로 삼킨다)
-    const cut = balanceFences(srcLines, lineNoOf, addedSet);
+    const cut = balanceFences(srcLines, lineNoOf, addedSet, startsAtFileBeginning);
     for (const n of cut.inlineGapAfter) gapAfter.delete(n);
 
     let tokens;
