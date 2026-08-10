@@ -330,6 +330,9 @@
   /** frontmatter 조각으로 인정할 최대 시작 라인. 이보다 아래에서 시작하면 본문으로 본다. */
   const FM_PARTIAL_MAX_LINE = 40;
 
+  /** 조각을 frontmatter 로 인정할 최상위 키 꼴. 본문의 `- 항목`·`| 셀` 을 키로 읽지 않게 좁혀 둔다. */
+  const FM_KEY = /^[A-Za-z0-9_.$-]+$/;
+
   /** 라인들을 접힌 구간 경계로 잘라 "번호가 이어지는 구간" 배열로 만든다. */
   function splitSegments(lines) {
     const segs = [];
@@ -350,6 +353,18 @@
 
   /** 조각이 YAML 매핑으로 읽히는가. */
   const fmParsable = (seg) => !!parseFrontmatterTree(splitOrphanHead(seg).body);
+
+  /**
+   * 첫 조각 뒤의 조각을 frontmatter 로 이어 볼 수 있는가.
+   * `looksLikeFrontmatter` 와 같은 근거(빈 줄 없음·키가 YAML 식별자 꼴)를 요구한다.
+   * 단 부모 키가 diff 밖이라 값만 남은 조각은 읽을 키가 없으므로 그대로 통과시킨다.
+   */
+  function fmSegmentOk(seg) {
+    if (seg.some((l) => !l.text.trim())) return false;
+    const body = splitOrphanHead(seg).body;
+    const rows = parseFrontmatterTree(body);
+    return rows ? rows.every((r) => FM_KEY.test(r.key)) : !body.length;
+  }
 
   /** 앞머리 줄들이 YAML 조각처럼 생겼는가(시퀀스 항목이거나 `key: value`). */
   const fmOrphanish = (lines) =>
@@ -372,7 +387,7 @@
     if (!rows || !rows.length) return false;
     // 표 조각(`| 항목`)·불릿 목록(`- 생년`)·산문도 `fmSplitKey` 는 키로 통과시킨다.
     // 여는 `---` 가 없는 조각은 근거가 이것뿐이므로 키 꼴을 YAML 식별자로 좁힌다
-    if (!rows.every((r) => /^[A-Za-z0-9_.$-]+$/.test(r.key))) return false;
+    if (!rows.every((r) => FM_KEY.test(r.key))) return false;
 
     return rows.length >= 2 ||
       rows.some((r) => r.node && r.node.type !== 'scalar') ||
@@ -408,6 +423,8 @@
       if (at === -1 && !fmParsable(seg)) { rest = segs.slice(s).flat(); break; }
 
       const head = at === -1 ? seg : seg.slice(0, at);
+      // 첫 조각 뒤는 접힌 구간 너머의 본문 hunk 일 수 있다 — 같은 근거를 다시 요구한다
+      if (s > 0 && head.length && !fmSegmentOk(head)) { rest = segs.slice(s).flat(); break; }
       if (head.length) segments.push(head);
       if (at !== -1) {
         closed = true;
