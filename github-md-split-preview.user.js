@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub MD Split Preview
 // @namespace    https://github.com/lucidash
-// @version      2.6.0
+// @version      2.7.0
 // @description  GitHub PR/commit/compare의 변경 파일 화면에서 마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에 보여주고 스크롤을 동기화합니다.
 // @author       muzi
 // @homepageURL  https://github.com/tpcint/gh-md-split-preview
