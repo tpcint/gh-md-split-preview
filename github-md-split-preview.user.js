@@ -1103,6 +1103,22 @@
     return cutInRange(map, start, end)?.marker ?? null;
   }
 
+  /**
+   * 토큰 범위에 걸친 cut 을 원문 순서대로 **전부** 모은다.
+   * 인용문·목록 하나가 조각을 둘 이상 품을 수 있어, 한 건만 보면 나머지 조각은
+   * `코드블록 일부` 안내도 없이 온전한 블록처럼 지나간다 (mermaid 는 그걸 그려버린다).
+   */
+  function partCutsInRange(head, tail, start, end) {
+    const out = [];
+    for (const [at, marker] of head) {
+      if (at >= start && at <= end) out.push({ at, marker, where: '여는' });
+    }
+    for (const [at, marker] of tail) {
+      if (at >= start && at <= end) out.push({ at, marker, where: '닫는' });
+    }
+    return out.sort((a, b) => a.at - b.at);
+  }
+
   function countCodeTokens(tokens) {
     let count = 0;
     const visit = (token) => {
@@ -1212,14 +1228,13 @@
         if (addedSet.has(n)) changed = true;
       }
 
-      const headCut = cutInRange(cut.head, start, end);
-      const tailCut = cutInRange(cut.tail, start, end);
-      const codeCut = headCut || tailCut;
-      let partToken = null;
-      if (codeCut) {
+      // 조각마다 해당 code token 을 찾아둔다. 같은 token 에 두 cut 이 걸리면 앞선 쪽을 남긴다.
+      const partOf = new Map();
+      for (const partCut of partCutsInRange(cut.head, cut.tail, start, end)) {
         try {
-          const prefix = MD.lexer(srcLines.slice(start, codeCut.at + 1).join('\n'));
-          partToken = findCodeToken([token], countCodeTokens(prefix));
+          const prefix = MD.lexer(srcLines.slice(start, partCut.at + 1).join('\n'));
+          const codeToken = findCodeToken([token], countCodeTokens(prefix));
+          if (codeToken && !partOf.has(codeToken)) partOf.set(codeToken, partCut);
         } catch { /* 본문 렌더는 유지하고 부분 안내만 생략한다 */ }
       }
 
@@ -1233,13 +1248,14 @@
         try {
           const sub = [token];
           sub.links = tokens.links || {};
-          if (partToken) {
+          if (partOf.size) {
             const renderer = new MD.Renderer();
             const renderCode = renderer.code;
             renderer.code = function (codeToken) {
               const rendered = renderCode.call(this, codeToken);
-              return codeToken === partToken
-                ? renderCodePart(rendered, codeCut.marker, headCut ? '여는' : '닫는')
+              const partCut = partOf.get(codeToken);
+              return partCut
+                ? renderCodePart(rendered, partCut.marker, partCut.where)
                 : rendered;
             };
             html = applyAlerts(MD.parser(sub, { renderer }));
