@@ -16,7 +16,7 @@ docs/
 │   └── troubleshooting.md
 ├── guides/
 │   ├── authoring.md            # 문서 작성 규칙
-│   ├── review.md               # 리뷰 절차
+│   ├── review.md               # 리뷰 절차와 체크리스트
 │   ├── translation.md
 │   └── publishing.md
 ├── reference/
