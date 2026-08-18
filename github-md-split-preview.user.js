@@ -1325,6 +1325,24 @@
   let mermaidTheme = '';
   let mermaidWarned = false;
 
+  /**
+   * 그려낸 SVG 를 `테마\n소스` 로 기억한다.
+   * rerender 는 우측 innerHTML 을 통째로 새로 채우므로 pre 의 완료 표시도 함께 사라져,
+   * 캐시가 없으면 Expand 마다 같은 다이어그램을 처음부터 다시 그린다.
+   * 같은 소스가 한 문서에 두 번 나오면 SVG 내부 id 도 같아지지만, 정의가 바이트 단위로
+   * 같아 `url(#…)` 이 어느 쪽을 잡아도 결과가 같다.
+   */
+  const mermaidCache = new Map();
+  const MERMAID_CACHE_MAX = 64;
+
+  /** 그려낸 SVG 를 코드블록 자리에 끼운다. */
+  function placeMermaid(pre, svg) {
+    const box = document.createElement('div');
+    box.className = 'mdsp-mermaid';
+    box.innerHTML = svg;
+    pre.replaceWith(box);
+  }
+
   /** 현재 색상 모드에 맞춰 mermaid 를 준비한다. 없으면 null — 호출부는 코드블록 그대로 둔다. */
   function ensureMermaid() {
     if (!MERMAID) {
@@ -1359,23 +1377,44 @@
     if (!view.right) return; // 그리기 직전에 2단이 꺼진 경우
     const targets = mermaidTargets(view.right);
     if (!targets.length) return;
+
+    const theme = mermaidThemeName(
+      document.documentElement,
+      window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    );
+
+    // 이미 그려본 것은 첫 await 전에 끼운다 — 그러지 않으면 rerender 뒤 한 프레임 동안
+    // 그 자리가 mermaid 소스 코드블록으로 보인다.
+    const pending = [];
+    let cached = false;
+    for (const { pre, src } of targets) {
+      const svg = mermaidCache.get(`${theme}\n${src}`);
+      if (svg === undefined) { pending.push({ pre, src }); continue; }
+      pre.dataset.mdspMermaid = 'done';
+      placeMermaid(pre, svg);
+      cached = true;
+    }
+    if (cached) view.invalidateAnchors?.();
+    if (!pending.length) return;
+
     const lib = ensureMermaid();
     if (!lib) return;
 
     const gen = view.renderGen;
     let drawn = false;
-    for (const { pre, src } of targets) {
+    for (const { pre, src } of pending) {
       // 그리는 사이에 diff 가 바뀌어 다시 렌더링됐으면 낡은 결과를 붙이지 않는다
       if (view.renderGen !== gen || !pre.isConnected) break;
       pre.dataset.mdspMermaid = 'done';
       const id = `mdsp-mermaid-${++mermaidSeq}`;
       try {
         const { svg } = await lib.render(id, src);
+        if (mermaidCache.size >= MERMAID_CACHE_MAX) {
+          mermaidCache.delete(mermaidCache.keys().next().value);
+        }
+        mermaidCache.set(`${theme}\n${src}`, svg);
         if (view.renderGen !== gen || !pre.isConnected) break;
-        const box = document.createElement('div');
-        box.className = 'mdsp-mermaid';
-        box.innerHTML = svg;
-        pre.replaceWith(box);
+        placeMermaid(pre, svg);
         drawn = true;
       } catch (e) {
         if (view.renderGen !== gen || !pre.isConnected) break;

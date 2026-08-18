@@ -186,3 +186,49 @@ test('cleans up the temporary node mermaid leaves behind', async () => {
   assert.equal(removed.length, 1);
   assert.match(removed[0], /^dmdsp-mermaid-\d+$/);
 });
+
+/** rerender 는 innerHTML 을 새로 채우므로 pre 도 표시도 새로 만들어진다. */
+function counting() {
+  const seen = { calls: 0 };
+  const helpers = load({
+    mermaid: {
+      initialize() {},
+      async render(id) { seen.calls++; return { svg: `<svg id="${id}"/>` }; },
+    },
+  });
+  return { ...helpers, seen };
+}
+
+test('reuses the cached svg instead of drawing the same source again', async () => {
+  const { renderMermaid, seen } = counting();
+  const src = 'flowchart TD\n A --> B';
+  const first = block(src);
+  await renderMermaid({ right: root([first]), renderGen: 1, invalidateAnchors() {} });
+
+  const second = block(src);
+  await renderMermaid({ right: root([second]), renderGen: 1, invalidateAnchors() {} });
+
+  assert.equal(seen.calls, 1, '두 번째 렌더는 mermaid 를 다시 부르지 않는다');
+  assert.equal(second.replacedBy.className, 'mdsp-mermaid');
+  assert.equal(second.replacedBy.innerHTML, first.replacedBy.innerHTML);
+});
+
+test('places a cached diagram before the first await', async () => {
+  const { renderMermaid, seen } = counting();
+  const src = 'sequenceDiagram\n A->>B: hi';
+  await renderMermaid({ right: root([block(src)]), renderGen: 1, invalidateAnchors() {} });
+
+  const again = block(src);
+  let invalidated = 0;
+  const pending = renderMermaid({
+    right: root([again]),
+    renderGen: 1,
+    invalidateAnchors: () => { invalidated++; },
+  });
+
+  // 같은 task 안에서 끼워야 소스 코드블록이 보이는 구간이 생기지 않는다
+  assert.equal(again.replacedBy?.className, 'mdsp-mermaid');
+  assert.equal(invalidated, 1);
+  await pending;
+  assert.equal(seen.calls, 1);
+});
