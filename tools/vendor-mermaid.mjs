@@ -112,4 +112,8 @@ await writeFile(
 console.log(`vendor/mermaid.min.js 갱신 · mermaid ${version} · ${patched.length.toLocaleString()} bytes`);
 console.log(`치환: ${match.before}`);
 console.log(`  →   ${match.after}`);
-console.log('이어서 `node --test tests/*.test.cjs` 로 함수 스코프 로드를 확인하세요.');
+console.log('');
+console.log('다음 순서로 마무리하세요.');
+console.log('  1. node --test tests/*.test.cjs                      함수 스코프 로드 확인');
+console.log(`  2. git tag mermaid-vendor-${version} && git push origin mermaid-vendor-${version}`);
+console.log(`  3. @require 의 태그를 mermaid-vendor-${version} 로, @version 도 함께 올리기`);

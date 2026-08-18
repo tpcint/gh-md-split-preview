@@ -13,7 +13,7 @@
 // @match        https://github.com/*/*/commits/*
 // @match        https://github.com/*/*/compare/*
 // @require      https://cdn.jsdelivr.net/npm/marked@15/marked.min.js
-// @require      https://cdn.jsdelivr.net/gh/tpcint/gh-md-split-preview@main/vendor/mermaid.min.js
+// @require      https://cdn.jsdelivr.net/gh/tpcint/gh-md-split-preview@mermaid-vendor-11.16.1/vendor/mermaid.min.js
 // @grant        GM_addStyle
 // @run-at       document-idle
 // @noframes

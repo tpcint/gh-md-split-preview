@@ -128,4 +128,13 @@ node tools/vendor-mermaid.mjs 11.17.0    # 특정 버전으로 갱신
 node --test tests/*.test.cjs             # 함수 스코프 로드 재확인
 ```
 
-업스트림이 전역 노출 방식을 또 바꾸면 도구가 치환 대상을 못 찾아 **실패합니다.** 조용히 깨진 사본을 만들지 않으려는 의도이므로, 그때는 새 형태를 확인해 `tools/vendor-mermaid.mjs`의 `KNOWN_TAILS`에 추가하세요. 사본을 바꾼 뒤에는 `@version`도 올려야 각자에게 배포됩니다.
+업스트림이 전역 노출 방식을 또 바꾸면 도구가 치환 대상을 못 찾아 **실패합니다.** 조용히 깨진 사본을 만들지 않으려는 의도이므로, 그때는 새 형태를 확인해 `tools/vendor-mermaid.mjs`의 `KNOWN_TAILS`에 추가하세요.
+
+사본을 갱신하면 `@require`가 가리킬 **태그도 새로 만들어야** 합니다. `@require`를 `main` 같은 움직이는 ref로 두면 브랜치에서 검증할 수 없고 되돌리기도 어려워, 사본마다 내용 태그를 하나 둡니다.
+
+```bash
+git tag mermaid-vendor-11.17.0 && git push origin mermaid-vendor-11.17.0
+# 그 뒤 @require 의 태그와 @version 을 함께 올린다
+```
+
+`@version`을 올리지 않으면 Tampermonkey가 새 사본을 받아가지 않습니다.
