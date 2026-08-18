@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub MD Split Preview
 // @namespace    https://github.com/lucidash
-// @version      2.9.0
+// @version      2.10.0
 // @description  GitHub PR/commit/compare의 변경 파일 화면에서 마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에 보여주고 스크롤을 동기화합니다.
 // @author       muzi
 // @homepageURL  https://github.com/tpcint/gh-md-split-preview
@@ -190,7 +190,7 @@
       word-break: keep-all;
     }
 
-    /* 여는(또는 닫는) 펜스 줄이 diff 밖이라 채워 넣은 코드블록 — 점선으로 "잘린 구간"임을 알린다 */
+    /* 펜스 줄이 diff 밖이라 채워 넣었거나(코드블록) 모양으로 살린(트리) 구간 — 점선으로 알린다 */
     .mdsp-right .markdown-body .mdsp-code-part .mdsp-part-note {
       padding: 0 0 4px; font-size: 11px; color: var(--fgColor-muted, #8b949e);
     }
@@ -838,6 +838,50 @@
 
   // ── 표 조각 렌더 ─ 끝
 
+  // ── 트리 조각 렌더 ─ 시작
+
+  /** `├──` `└──` `│` 처럼 박스 드로잉으로 시작하는 줄 — `tree` 출력의 가지. */
+  const TREE_BRANCH = /^[ \t]*[\u2500-\u257F]/;
+  /** 트리 맨 윗줄에 올 수 있는 루트 — `flows/` 처럼 공백 없는 한 덩어리(뒤 주석은 허용). */
+  const TREE_ROOT = /^[ \t]*[^\s#][^\s]*[ \t]*(#.*)?$/;
+
+  /**
+   * 코드블록 안 디렉터리 트리는 몇 줄만 고쳐도 여는 ``` 과 닫는 ``` 이 함께
+   * diff 밖으로 밀려난다. 조각에 펜스가 한 줄도 없으니 balanceFences 가 채울
+   * 근거가 없고, marked 는 문단으로 읽어 줄바꿈과 칸 맞춤을 통째로 무너뜨린다.
+   *
+   * 가지 문자로 시작하는 줄이 둘 이상인 구간만 트리로 보고 원문을 그대로 돌려준다.
+   * 트리가 아니면 null.
+   */
+  function parseTreeFragment(raw) {
+    const text = raw.replace(/\s+$/, '');
+    const lines = text.split('\n').filter((l) => l.trim());
+    if (lines.length < 2) return null;      // 한 줄은 문단으로 붙어도 잃는 게 없다
+
+    const branches = lines.filter((l) => TREE_BRANCH.test(l)).length;
+    if (branches < 2) return null;          // 본문에 섞인 가로줄 한 줄은 트리가 아니다
+    if (branches === lines.length) return text;
+
+    // 가지가 아닌 줄은 맨 위 루트 한 줄까지만 봐준다
+    const root = lines[0];
+    return branches === lines.length - 1 && !TREE_BRANCH.test(root) && TREE_ROOT.test(root)
+      ? text
+      : null;
+  }
+
+  /**
+   * 트리 조각을 줄바꿈·칸 맞춤 그대로 보여준다.
+   * 펜스를 눈으로 확인한 게 아니라 모양으로 짐작한 자리라, 안내도 본 것만 적는다.
+   */
+  function renderTreeFragment(text) {
+    const note =
+      '<div class="mdsp-part-note">트리 구조 · diff 안에 <code>```</code> 이 없어 ' +
+      '원문 줄바꿈을 살려서 보여줍니다 (왼쪽에서 펼치면 전체로 보입니다)</div>';
+    return `<div class="mdsp-code-part">${note}<pre><code>${escapeHtml(text)}</code></pre></div>`;
+  }
+
+  // ── 트리 조각 렌더 ─ 끝
+
   // ── 잘린 코드펜스 보정 ─ 시작
 
   /** 코드펜스 한 줄이면 marker 와 컨테이너 prefix 를, 아니면 null 을 돌려준다. */
@@ -1100,6 +1144,31 @@
     return { head, tail, inlineGapAfter };
   }
 
+  /**
+   * ``` 이 한 줄도 없는 조각의 [시작, 끝] 인덱스를 모은다.
+   * 그런 조각은 통째로 코드블록 안일 수 있다 (여는 펜스도 닫는 펜스도 diff 밖).
+   * 한쪽만 들어온 조각은 balanceFences 가 이미 채웠으니 여기서 뺀다.
+   * 파일 1번 줄부터 보이는 조각도 그 앞에 여는 펜스가 있을 수 없으니 뺀다.
+   */
+  function fencelessSegments(srcLines, lineNoOf, startsAtFileBeginning = lineNoOf[0] === 1) {
+    const out = [];
+    let seg = null;
+    for (let i = 0; i <= srcLines.length; i++) {
+      if (i < srcLines.length && lineNoOf[i] != null) {
+        if (seg) seg.end = i;
+        else seg = { start: i, end: i, fenced: false };
+        if (fenceLine(srcLines[i])) seg.fenced = true;
+        continue;
+      }
+      if (seg && !seg.fenced && lineNoOf[seg.start] !== 1 &&
+          !(startsAtFileBeginning && seg.start === 0)) {
+        out.push({ start: seg.start, end: seg.end });
+      }
+      seg = null;
+    }
+    return out;
+  }
+
   /** 중첩 blockquote/list token 안에 들어간 합성 fence 도 찾는다. */
   function cutInRange(map, start, end) {
     for (const [at, marker] of map) {
@@ -1205,6 +1274,9 @@
     const cut = balanceFences(srcLines, lineNoOf, addedSet, startsAtFileBeginning);
     for (const n of cut.inlineGapAfter) gapAfter.delete(n);
 
+    // 펜스가 한 줄도 없어 채울 근거조차 없던 조각 — 트리라면 줄바꿈을 살려서 보여준다
+    const fenceless = fencelessSegments(srcLines, lineNoOf, startsAtFileBeginning);
+
     let tokens;
     try {
       tokens = MD.lexer(srcLines.join('\n'));
@@ -1248,11 +1320,16 @@
       }
 
       let html = '';
-      const fragment = token.type === 'paragraph' || token.type === 'text'
-        ? parseTableFragment(raw)
+      const flowing = token.type === 'paragraph' || token.type === 'text';
+      const fragment = flowing ? parseTableFragment(raw) : null;
+      const tree = !fragment && flowing &&
+        fenceless.some((s) => start >= s.start && end <= s.end)
+        ? parseTreeFragment(raw)
         : null;
       if (fragment) {
         html = renderTableFragment(fragment);
+      } else if (tree) {
+        html = renderTreeFragment(tree);
       } else {
         try {
           const sub = [token];
