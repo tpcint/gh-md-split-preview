@@ -1536,7 +1536,7 @@
     view.right.innerHTML = renderBlocks(lines);
     view.invalidateAnchors?.();
     // 다이어그램은 비동기라 본문보다 늦게 들어온다. 실패해도 본문 렌더는 그대로 둔다.
-    renderMermaid(view).catch((e) => log('mermaid 렌더 실패', e));
+    renderMermaid(view).catch((e) => console.warn('[md-split] mermaid 렌더 실패', e));
     if (view.note) {
       const changed = lines.filter((l) => l.added).length;
       // split diff 위에 2단을 얹으면 사실상 4단이 되어 너무 좁아진다
