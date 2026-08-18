@@ -1,0 +1,3 @@
+# mermaid 사본은 업스트림 번들이라 우리 코드가 아니고, 3.5MB 한 줄이라 diff 로 볼 것도 없다.
+# 무엇이 바뀌었는지는 vendor/mermaid.lock.json 의 버전·해시로 확인한다.
+vendor/mermaid.min.js linguist-vendored -diff

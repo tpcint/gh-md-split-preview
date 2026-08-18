@@ -1,0 +1,12 @@
+{
+  "version": "11.16.1",
+  "upstream": "https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js",
+  "upstreamSha256": "18327bef70d96fb505fe7287d9f6a7362ebf07ff6576ddfaffb1a06f3e1a2954",
+  "patchedSha256": "b5b5cbe675dc928a0b694c56d175caee66d8d7d0f1151e53f2cab99cf9f5b3bc",
+  "patch": {
+    "before": "globalThis[\"mermaid\"] = globalThis.__esbuild_esm_mermaid_nm[\"mermaid\"].default;",
+    "after": "globalThis[\"mermaid\"] = __esbuild_esm_mermaid_nm[\"mermaid\"].default;",
+    "seenIn": "11.7.0 ~"
+  },
+  "note": "Tampermonkey 는 @require 를 함수 스코프에서 실행하므로 최상위 var 가 globalThis 에 오르지 않는다. 그래서 전역 노출 줄이 지역 var 를 읽게 고친다."
+}
