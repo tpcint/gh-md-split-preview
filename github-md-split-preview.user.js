@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub MD Split Preview
 // @namespace    https://github.com/lucidash
-// @version      2.7.0
+// @version      2.8.0
 // @description  GitHub PR/commit/compare의 변경 파일 화면에서 마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에 보여주고 스크롤을 동기화합니다.
 // @author       muzi
 // @homepageURL  https://github.com/tpcint/gh-md-split-preview
@@ -13,6 +13,7 @@
 // @match        https://github.com/*/*/commits/*
 // @match        https://github.com/*/*/compare/*
 // @require      https://cdn.jsdelivr.net/npm/marked@15/marked.min.js
+// @require      https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js
 // @grant        GM_addStyle
 // @run-at       document-idle
 // @noframes
@@ -27,6 +28,7 @@
  *    렌더링된 블록마다 data-line 을 심는다.
  * 3. 좌(diff)/우(rendered) 양쪽에 [라인번호 → 스크롤 오프셋] 앵커를 만들고 선형 보간으로 동기화한다.
  * 4. 추가(+)된 라인을 포함하는 렌더링 블록은 왼쪽에 초록 바로 강조한다.
+ * 5. ```mermaid 코드블록은 렌더 후 mermaid 로 SVG 를 그려 끼워 넣는다(실패하면 코드블록 그대로).
  *
  * 지원 DOM
  * --------
@@ -36,7 +38,8 @@
  * 한계
  * ----
  * - GitHub 이 접어둔 구간은 diff DOM 에 없으므로 렌더링에서도 빠진다(Expand 하면 자동 반영).
- * - mermaid 등 GitHub 전용 위젯은 코드블록 그대로 표시된다.
+ * - 펜스가 diff 밖이라 조각만 남은 mermaid 는 문법이 온전하지 않으므로 그리지 않고 코드로 둔다.
+ * - math($$…$$) 등 나머지 GitHub 전용 위젯은 여전히 코드블록 그대로 표시된다.
  */
 
 (function () {
@@ -184,6 +187,14 @@
     }
     .mdsp-right .markdown-body .mdsp-code-part pre {
       border: 1px dashed var(--borderColor-default, #30363d);
+    }
+
+    /* mermaid 로 그려낸 다이어그램 — 패널이 좁아도 넘치지 않게 가로 스크롤만 준다 */
+    .mdsp-right .markdown-body .mdsp-mermaid { overflow-x: auto; padding: 4px 0; }
+    .mdsp-right .markdown-body .mdsp-mermaid svg { max-width: 100%; height: auto; }
+    /* 문법 오류로 그리지 못해 코드블록으로 되돌린 자리 */
+    .mdsp-right .markdown-body .mdsp-mermaid-note {
+      padding: 0 0 4px; font-size: 11px; color: var(--fgColor-danger, #f85149);
     }
 
     .mdsp-gap {
@@ -1255,6 +1266,119 @@
     return `<div class="markdown-body">${out.join('\n')}</div>`;
   }
 
+  // ── mermaid 다이어그램 ─ 시작
+
+  /**
+   * 아직 다이어그램으로 바꾸지 않은 mermaid 코드블록을 모은다.
+   * 펜스가 diff 밖이라 조각만 남은 블록(.mdsp-code-part)은 문법이 온전하지 않아,
+   * 그려봤자 실제 문서와 다른 그림이 되므로 코드블록 그대로 둔다.
+   */
+  function mermaidTargets(root) {
+    const out = [];
+    for (const code of root.querySelectorAll('pre > code.language-mermaid')) {
+      const pre = code.parentElement;
+      if (!pre || pre.dataset.mdspMermaid) continue;
+      if (pre.closest('.mdsp-code-part')) continue;
+      const src = (code.textContent || '').trim();
+      if (!src) continue;
+      out.push({ pre, src });
+    }
+    return out;
+  }
+
+  /** GitHub 의 현재 색상 모드를 mermaid 테마 이름으로 옮긴다. */
+  function mermaidThemeName(rootEl, prefersDark) {
+    const mode = rootEl?.getAttribute('data-color-mode') || 'auto';
+    const dark = mode === 'dark' || (mode !== 'light' && !!prefersDark);
+    const named = rootEl?.getAttribute(dark ? 'data-dark-theme' : 'data-light-theme') || '';
+    // GitHub 테마 이름은 dark_dimmed / light_high_contrast 처럼 밝기가 앞에 온다
+    return (named ? /^dark/.test(named) : dark) ? 'dark' : 'default';
+  }
+
+  /** mermaid 파싱 오류 메시지는 여러 줄이라 배지에 넣을 첫 줄만 남긴다. */
+  function mermaidErrorText(err) {
+    const first = String(err?.message || err || '')
+      .split('\n').map((s) => s.trim()).find(Boolean) || '';
+    return first.length > 100 ? `${first.slice(0, 99)}…` : first;
+  }
+
+  const MERMAID = typeof mermaid !== 'undefined'
+    ? mermaid
+    : (typeof window !== 'undefined' ? window.mermaid : null);
+  let mermaidSeq = 0;
+  let mermaidTheme = '';
+  let mermaidWarned = false;
+
+  /** 현재 색상 모드에 맞춰 mermaid 를 준비한다. 없으면 null — 호출부는 코드블록 그대로 둔다. */
+  function ensureMermaid() {
+    if (!MERMAID) {
+      if (!mermaidWarned) {
+        mermaidWarned = true;
+        console.warn('[md-split] mermaid 로드 실패 — 다이어그램은 코드블록으로 표시됩니다.');
+      }
+      return null;
+    }
+    const theme = mermaidThemeName(
+      document.documentElement,
+      window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    );
+    if (theme !== mermaidTheme) {
+      mermaidTheme = theme;
+      MERMAID.initialize({
+        startOnLoad: false,
+        theme,
+        securityLevel: 'strict',
+        // 실패한 자리는 우리가 코드블록으로 되돌리므로 mermaid 쪽 에러 그림은 끈다
+        suppressErrorRendering: true,
+      });
+    }
+    return MERMAID;
+  }
+
+  /**
+   * 우측 패널의 mermaid 코드블록을 SVG 로 바꾼다.
+   * 다이어그램만큼 높이가 늘어나므로 하나라도 그렸으면 스크롤 앵커를 다시 잡는다.
+   */
+  async function renderMermaid(view) {
+    if (!view.right) return; // 그리기 직전에 2단이 꺼진 경우
+    const targets = mermaidTargets(view.right);
+    if (!targets.length) return;
+    const lib = ensureMermaid();
+    if (!lib) return;
+
+    const gen = view.renderGen;
+    let drawn = false;
+    for (const { pre, src } of targets) {
+      // 그리는 사이에 diff 가 바뀌어 다시 렌더링됐으면 낡은 결과를 붙이지 않는다
+      if (view.renderGen !== gen || !pre.isConnected) break;
+      pre.dataset.mdspMermaid = 'done';
+      const id = `mdsp-mermaid-${++mermaidSeq}`;
+      try {
+        const { svg } = await lib.render(id, src);
+        if (view.renderGen !== gen || !pre.isConnected) break;
+        const box = document.createElement('div');
+        box.className = 'mdsp-mermaid';
+        box.innerHTML = svg;
+        pre.replaceWith(box);
+        drawn = true;
+      } catch (e) {
+        if (view.renderGen !== gen || !pre.isConnected) break;
+        const why = mermaidErrorText(e);
+        const note = document.createElement('div');
+        note.className = 'mdsp-mermaid-note';
+        note.textContent = `mermaid 문법 오류로 그리지 못했습니다${why ? ` · ${why}` : ''}`;
+        pre.before(note);
+        drawn = true;
+      } finally {
+        // 실패했을 때 mermaid 가 body 에 남기는 측정용 임시 노드를 치운다
+        document.getElementById(`d${id}`)?.remove();
+      }
+    }
+    if (drawn) view.invalidateAnchors?.();
+  }
+
+  // ── mermaid 다이어그램 ─ 끝
+
   // ────────────────────────────────────────────────────────────── 스크롤 동기화
 
   /** 패널 안 요소들의 [라인번호, 패널 내부 오프셋] 앵커를 만든다. */
@@ -1392,8 +1516,11 @@
 
   function rerender(view) {
     const lines = extractAfterLines(view.left);
+    view.renderGen = (view.renderGen || 0) + 1;
     view.right.innerHTML = renderBlocks(lines);
     view.invalidateAnchors?.();
+    // 다이어그램은 비동기라 본문보다 늦게 들어온다. 실패해도 본문 렌더는 그대로 둔다.
+    renderMermaid(view).catch((e) => log('mermaid 렌더 실패', e));
     if (view.note) {
       const changed = lines.filter((l) => l.added).length;
       // split diff 위에 2단을 얹으면 사실상 4단이 되어 너무 좁아진다
