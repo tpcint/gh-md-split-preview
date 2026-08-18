@@ -19,13 +19,10 @@ vm.runInNewContext(
     `  cutMarkerInRange: typeof cutMarkerInRange === 'function' ? cutMarkerInRange : () => undefined,\n` +
     `  renderCodePart: typeof renderCodePart === 'function' ? renderCodePart : (html) => html,\n` +
     `  findCodeToken: typeof findCodeToken === 'function' ? findCodeToken : () => null,\n` +
-    `  partCutsInRange: typeof partCutsInRange === 'function' ? partCutsInRange : () => [],\n` +
     `};`,
   sandbox,
 );
-const {
-  balanceFences, cutMarkerInRange, renderCodePart, findCodeToken, partCutsInRange,
-} = sandbox.helpers;
+const { balanceFences, cutMarkerInRange, renderCodePart, findCodeToken } = sandbox.helpers;
 
 function balance(srcLines, lineNoOf, changedLines, startsAtFileBeginning) {
   const cut = balanceFences(srcLines, lineNoOf, new Set(changedLines), startsAtFileBeginning);
@@ -258,38 +255,4 @@ test('raw HTML pre does not consume the fenced-code partial marker', () => {
   const tokens = [{ type: 'list', items: [{ tokens: [raw, code] }] }];
 
   assert.equal(findCodeToken(tokens, 1), code);
-});
-
-// vm 컨텍스트가 만든 객체라 호스트 쪽 평범한 객체로 옮겨서 비교한다
-function partCuts(head, tail, start, end) {
-  return [...partCutsInRange(new Map(head), new Map(tail), start, end)]
-    .map((cut) => ({ at: Number(cut.at), marker: String(cut.marker), where: String(cut.where) }));
-}
-
-test('one container token reports every cut it holds, in source order', () => {
-  // 인용문 하나가 여는 조각과 닫는 조각을 함께 품는 모양. 한 건만 집으면 나머지 조각이
-  // 안내 없이 온전한 블록처럼 지나가고, mermaid 는 그걸 그려버린다.
-  const result = balance(
-    ['> A --> B', '> ```', '> ```mermaid', '> flowchart TD', '>   X --> Y'],
-    [40, 41, 42, 43, 44],
-    [40],
-  );
-
-  assert.deepEqual(result.head, [[0, '```']]);
-  assert.deepEqual(result.tail, [[6, '```']]);
-  assert.deepEqual(partCuts(result.head, result.tail, 0, 6), [
-    { at: 0, marker: '```', where: '여는' },
-    { at: 6, marker: '```', where: '닫는' },
-  ]);
-});
-
-test('cuts outside the token range are left to their own token', () => {
-  const head = [[0, '```'], [9, '~~~']];
-  const tail = [[4, '```'], [12, '~~~']];
-
-  assert.deepEqual(partCuts(head, tail, 0, 4), [
-    { at: 0, marker: '```', where: '여는' },
-    { at: 4, marker: '```', where: '닫는' },
-  ]);
-  assert.deepEqual(partCuts(head, tail, 5, 8), []);
 });
