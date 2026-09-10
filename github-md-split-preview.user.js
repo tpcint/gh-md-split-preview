@@ -1563,7 +1563,10 @@
     const { left, right } = view;
     let leftAnchors = null;
     let rightAnchors = null;
-    let rafId = 0;
+    // 사용자 스크롤 동기화와 resync 복원은 rAF 핸들을 따로 쓴다. 하나로 합치면 복원을
+    // 예약한 직후 도착한 scroll 이 그 예약을 취소하고, 비워진 패널의 scrollTop 0 을
+    // 기준으로 계산해 양쪽이 최상단으로 간다.
+    const frames = { drive: 0, resync: 0 };
     // 사용자가 직접 조작한 패널만 동기화의 출발점으로 삼는다. 대입 직후 한 프레임만
     // scroll 이벤트를 무시하는 방식으로 바꾸면 Safari 에서 동작하지 않는다 — scrollTop 대입으로
     // 발생한 이벤트가 그 프레임보다 늦게 도착해 반대 방향 동기화가 실행되고, 좌우 앵커
@@ -1594,9 +1597,9 @@
       }
     };
 
-    const sync = (from, to, getFrom, getTo) => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
+    const sync = (from, to, getFrom, getTo, slot) => {
+      cancelAnimationFrame(frames[slot]);
+      frames[slot] = requestAnimationFrame(() => {
         ensure();
         const a = getFrom();
         const b = getTo();
@@ -1615,7 +1618,7 @@
     // 오른쪽 패널을 재렌더하면 innerHTML 대입이 스크롤 컨테이너를 비워 scrollTop 이 0 이 된다.
     // 그때 남아 있는 위치는 왼쪽뿐이므로(GitHub 이 관리해 재렌더 대상이 아니다) 왼쪽을
     // 기준으로 다시 맞춘다. 호출하지 않으면 다시 맞춰 줄 scroll 이벤트가 없어 최상단에 머문다.
-    view.resync = () => sync(left, right, () => leftAnchors, () => rightAnchors);
+    view.resync = () => sync(left, right, () => leftAnchors, () => rightAnchors, 'resync');
 
     // 스크롤바 드래그·휠·키보드·터치 어느 쪽이든, 입력이 발생한 패널이 출발점이 된다.
     // 패널 내부 요소의 핸들러가 전파를 멈추더라도 받지 못하는 일이 없게 capture 로 등록한다.
@@ -1627,11 +1630,11 @@
 
     left.addEventListener('scroll', () => {
       if (driver !== left) return;
-      sync(left, right, () => leftAnchors, () => rightAnchors);
+      sync(left, right, () => leftAnchors, () => rightAnchors, 'drive');
     }, { passive: true });
     right.addEventListener('scroll', () => {
       if (driver !== right) return;
-      sync(right, left, () => rightAnchors, () => leftAnchors);
+      sync(right, left, () => rightAnchors, () => leftAnchors, 'drive');
     }, { passive: true });
     window.addEventListener('resize', view.invalidateAnchors, { passive: true });
   }

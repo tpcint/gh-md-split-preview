@@ -14,9 +14,11 @@ assert.notEqual(end, -1, 'scroll sync helper end');
 
 /**
  * 프레임을 수동으로 진행시키는 가짜 rAF 와, scrollTop 대입에서 비롯한 scroll 이벤트를
- * 두 프레임 뒤에 배달하는 패널로 Safari 의 이벤트 타이밍을 모사한다.
+ * `delay` 프레임 뒤에 배달하는 패널로 Safari 의 이벤트 타이밍을 모사한다.
+ * `deliverFirst` 는 그 배달을 같은 프레임의 rAF 콜백보다 앞에 두어, 브라우저가 렌더링
+ * 단계 전에 이벤트 태스크를 처리하는 순서를 재현한다.
  */
-function harness() {
+function harness({ deliverFirst = false, delay = 2 } = {}) {
   let frame = 0;
   let nextId = 1;
   let pending = [];
@@ -43,15 +45,26 @@ function harness() {
     sandbox,
   );
 
-  const tick = () => {
-    frame += 1;
+  const runPending = () => {
     const due = pending;
     pending = [];
     for (const { id, fn } of due) if (!cancelled.has(id)) fn();
+  };
+  const deliverDue = () => {
     for (let i = deliveries.length - 1; i >= 0; i -= 1) {
       if (deliveries[i].at > frame) continue;
       const [{ pane }] = deliveries.splice(i, 1);
       pane.dispatch('scroll');
+    }
+  };
+  const tick = () => {
+    frame += 1;
+    if (deliverFirst) {
+      deliverDue();
+      runPending();
+    } else {
+      runPending();
+      deliverDue();
     }
   };
 
@@ -85,7 +98,7 @@ function harness() {
       set(v) {
         top = v;
         pane.assigned += 1;
-        deliveries.push({ at: frame + 2, pane });
+        deliveries.push({ at: frame + delay, pane });
       },
     });
     return pane;
@@ -178,6 +191,23 @@ test('restores the preview pane after a rerender clears its scroll position', ()
 
   assert.equal(right.scrollTop, 120);
   assert.equal(left.scrollTop, 60, 'the diff pane must stay where the user left it');
+});
+
+test('restores the preview pane when it was the last pane the user scrolled', () => {
+  const { left, right, tick, view } = harness({ deliverFirst: true, delay: 1 });
+
+  right.userScroll(320);
+  for (let i = 0; i < 4; i += 1) tick();
+  assert.equal(left.scrollTop, 160);
+
+  // 재렌더: innerHTML 대입이 scrollTop 을 0 으로 만들고, 그 대입이 발생시킨 scroll 이 복원보다 먼저 도착한다
+  right.scrollTop = 0;
+  view.invalidateAnchors();
+  view.resync();
+  for (let i = 0; i < 6; i += 1) tick();
+
+  assert.equal(right.scrollTop, 320, 'the restore must survive the scroll event it caused');
+  assert.equal(left.scrollTop, 160, 'the diff pane must not follow the emptied preview to the top');
 });
 
 test('resyncs before the user has scrolled either pane', () => {
