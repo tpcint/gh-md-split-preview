@@ -126,6 +126,30 @@ test('replaces the code block with the rendered svg', async () => {
   assert.equal(invalidated, 1);
 });
 
+test('resyncs after placing a cached diagram', async () => {
+  const { renderMermaid } = load({
+    mermaid: { initialize() {}, async render(id) { return { svg: `<svg id="${id}"/>` }; } },
+  });
+  const src = 'flowchart TD\n A --> B';
+  const counts = { invalidated: 0, resynced: 0 };
+  const viewFor = (pre) => ({
+    right: root([pre]),
+    renderGen: 1,
+    invalidateAnchors: () => { counts.invalidated++; },
+    resync: () => { counts.resynced++; },
+  });
+
+  await renderMermaid(viewFor(block(src)));
+  assert.deepEqual(counts, { invalidated: 1, resynced: 1 });
+
+  // 같은 소스라 두 번째는 첫 await 전에 캐시로 교체되는 경로를 지난다
+  const cachedPre = block(src);
+  await renderMermaid(viewFor(cachedPre));
+
+  assert.equal(cachedPre.replacedBy.className, 'mdsp-mermaid');
+  assert.deepEqual(counts, { invalidated: 2, resynced: 2 });
+});
+
 test('leaves the code block in place and explains a syntax error', async () => {
   const { renderMermaid } = load({
     mermaid: {

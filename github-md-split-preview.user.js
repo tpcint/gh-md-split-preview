@@ -1480,7 +1480,12 @@
       placeMermaid(pre, svg);
       cached = true;
     }
-    if (cached) view.invalidateAnchors?.();
+    // 캐시된 SVG 로 바꾸는 것만으로도 패널 높이가 달라지므로, 여기서도 위치를 다시 맞춘다.
+    // 재렌더 두 번째 이후는 캐시가 적중하는 쪽이 일반적이라 이 경로가 오히려 자주 지난다.
+    if (cached) {
+      view.invalidateAnchors?.();
+      view.resync?.();
+    }
     if (!pending.length) return;
 
     const lib = ensureMermaid();
