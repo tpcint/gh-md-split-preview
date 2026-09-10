@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub MD Split Preview
 // @namespace    https://github.com/lucidash
-// @version      2.10.0
+// @version      2.10.1
 // @description  GitHub PR/commit/compare의 변경 파일 화면에서 마크다운 diff와 렌더링 결과를 좌우 2단으로 동시에 보여주고 스크롤을 동기화합니다.
 // @author       muzi
 // @homepageURL  https://github.com/tpcint/gh-md-split-preview
@@ -1515,7 +1515,10 @@
         document.getElementById(`d${id}`)?.remove();
       }
     }
-    if (drawn) view.invalidateAnchors?.();
+    if (drawn) {
+      view.invalidateAnchors?.();
+      view.resync?.();
+    }
   }
 
   // ── mermaid 다이어그램 ─ 끝
@@ -1560,8 +1563,12 @@
     const { left, right } = view;
     let leftAnchors = null;
     let rightAnchors = null;
-    let syncing = false;
     let rafId = 0;
+    // 사용자가 직접 조작한 패널만 동기화의 출발점으로 삼는다. 대입 직후 한 프레임만
+    // scroll 이벤트를 무시하는 방식으로 바꾸면 Safari 에서 동작하지 않는다 — scrollTop 대입으로
+    // 발생한 이벤트가 그 프레임보다 늦게 도착해 반대 방향 동기화가 실행되고, 좌우 앵커
+    // 간격 차이만큼 어긋난 채 왕복하다 최상단으로 수렴한다.
+    let driver = null;
 
     view.invalidateAnchors = () => { leftAnchors = null; rightAnchors = null; };
 
@@ -1588,7 +1595,6 @@
     };
 
     const sync = (from, to, getFrom, getTo) => {
-      if (syncing) return;
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
         ensure();
@@ -1599,14 +1605,34 @@
         if (line == null) return;
         const top = interpolate(b, line, 0);
         if (top == null) return;
-        syncing = true;
-        to.scrollTop = Math.max(0, top);
-        requestAnimationFrame(() => { syncing = false; });
+        const next = Math.max(0, top);
+        // Safari 는 scrollTop 대입 때마다 관성 스크롤을 중단시키므로 1px 미만은 대입하지 않는다
+        if (Math.abs(to.scrollTop - next) < 1) return;
+        to.scrollTop = next;
       });
     };
 
-    left.addEventListener('scroll', () => sync(left, right, () => leftAnchors, () => rightAnchors), { passive: true });
-    right.addEventListener('scroll', () => sync(right, left, () => rightAnchors, () => leftAnchors), { passive: true });
+    // 오른쪽 패널을 재렌더하면 innerHTML 대입이 스크롤 컨테이너를 비워 scrollTop 이 0 이 된다.
+    // 그때 남아 있는 위치는 왼쪽뿐이므로(GitHub 이 관리해 재렌더 대상이 아니다) 왼쪽을
+    // 기준으로 다시 맞춘다. 호출하지 않으면 다시 맞춰 줄 scroll 이벤트가 없어 최상단에 머문다.
+    view.resync = () => sync(left, right, () => leftAnchors, () => rightAnchors);
+
+    // 스크롤바 드래그·휠·키보드·터치 어느 쪽이든, 입력이 발생한 패널이 출발점이 된다.
+    // 패널 내부 요소의 핸들러가 전파를 멈추더라도 받지 못하는 일이 없게 capture 로 등록한다.
+    for (const pane of [left, right]) {
+      for (const type of ['wheel', 'pointerdown', 'touchstart', 'keydown']) {
+        pane.addEventListener(type, () => { driver = pane; }, { passive: true, capture: true });
+      }
+    }
+
+    left.addEventListener('scroll', () => {
+      if (driver !== left) return;
+      sync(left, right, () => leftAnchors, () => rightAnchors);
+    }, { passive: true });
+    right.addEventListener('scroll', () => {
+      if (driver !== right) return;
+      sync(right, left, () => rightAnchors, () => leftAnchors);
+    }, { passive: true });
     window.addEventListener('resize', view.invalidateAnchors, { passive: true });
   }
 
@@ -1660,6 +1686,7 @@
     view.renderGen = (view.renderGen || 0) + 1;
     view.right.innerHTML = renderBlocks(lines);
     view.invalidateAnchors?.();
+    view.resync?.();
     // 다이어그램은 비동기라 본문보다 늦게 들어온다. 실패해도 본문 렌더는 그대로 둔다.
     renderMermaid(view).catch((e) => console.warn('[md-split] mermaid 렌더 실패', e));
     if (view.note) {
