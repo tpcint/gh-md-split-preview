@@ -210,6 +210,23 @@ test('restores the preview pane when it was the last pane the user scrolled', ()
   assert.equal(left.scrollTop, 160, 'the diff pane must not follow the emptied preview to the top');
 });
 
+test('keeps a preview scroll that lands while a rerender restore is in flight', () => {
+  const { left, right, tick, view } = harness();
+
+  left.userScroll(60);
+  for (let i = 0; i < 4; i += 1) tick();
+
+  // 재렌더가 프리뷰를 비운 직후, 같은 프레임에 사용자가 프리뷰를 스크롤한다
+  right.scrollTop = 0;
+  view.invalidateAnchors();
+  view.resync();
+  right.userScroll(400);
+  for (let i = 0; i < 6; i += 1) tick();
+
+  assert.equal(right.scrollTop, 400, 'the user scroll must win over the restore');
+  assert.equal(left.scrollTop, 200, 'the diff pane must follow the user scroll, not the restore');
+});
+
 test('resyncs before the user has scrolled either pane', () => {
   const { left, right, tick, view } = harness();
 
