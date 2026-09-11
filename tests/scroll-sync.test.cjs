@@ -16,9 +16,10 @@ assert.notEqual(end, -1, 'scroll sync helper end');
  * 프레임을 수동으로 진행시키는 가짜 rAF 와, scrollTop 대입에서 비롯한 scroll 이벤트를
  * `delay` 프레임 뒤에 배달하는 패널로 Safari 의 이벤트 타이밍을 모사한다.
  * `deliverFirst` 는 그 배달을 같은 프레임의 rAF 콜백보다 앞에 두어, 브라우저가 렌더링
- * 단계 전에 이벤트 태스크를 처리하는 순서를 재현한다.
+ * 단계 전에 이벤트 태스크를 처리하는 순서를 재현한다. `leftPad`·`rightPad` 는 좌우 첫 앵커의
+ * 오프셋 차이(프리뷰 패딩, diff 의 hunk 헤더 행)를, `rightMax` 는 스크롤 최대치를 준다.
  */
-function harness({ deliverFirst = false, delay = 2 } = {}) {
+function harness({ deliverFirst = false, delay = 2, leftPad = 0, rightPad = 0, rightMax = Infinity } = {}) {
   let frame = 0;
   let nextId = 1;
   let pending = [];
@@ -68,7 +69,7 @@ function harness({ deliverFirst = false, delay = 2 } = {}) {
     }
   };
 
-  const makePane = (rows, selector) => {
+  const makePane = (rows, selector, maxScroll) => {
     const listeners = new Map();
     const pane = {
       scrollTop: 0,
@@ -96,8 +97,11 @@ function harness({ deliverFirst = false, delay = 2 } = {}) {
     Object.defineProperty(pane, 'scrollTop', {
       get: () => top,
       set(v) {
-        top = v;
         pane.assigned += 1;
+        const clamped = Math.min(Math.max(0, v), maxScroll);
+        // 값이 그대로면 브라우저도 scroll 을 발생시키지 않는다
+        if (clamped === top) return;
+        top = clamped;
         deliveries.push({ at: frame + delay, pane });
       },
     });
@@ -109,20 +113,22 @@ function harness({ deliverFirst = false, delay = 2 } = {}) {
   const left = makePane(
     lines.map((line) => ({
       el: (pane) => ({
-        getBoundingClientRect: () => ({ top: (line - 1) * 20 - pane.scrollTop }),
+        getBoundingClientRect: () => ({ top: leftPad + (line - 1) * 20 - pane.scrollTop }),
         querySelectorAll: () => [{ classList: { contains: () => false }, querySelector: () => null, line }],
       }),
     })),
     'tr.diff-line-row, tr[class*=diff-line]',
+    Infinity,
   );
   const right = makePane(
     lines.map((line) => ({
       el: (pane) => ({
         getAttribute: () => String(line),
-        getBoundingClientRect: () => ({ top: (line - 1) * 40 - pane.scrollTop }),
+        getBoundingClientRect: () => ({ top: rightPad + (line - 1) * 40 - pane.scrollTop }),
       }),
     })),
     '.mdsp-block[data-line]',
+    rightMax,
   );
 
   const view = { left, right };
@@ -225,6 +231,35 @@ test('keeps a preview scroll that lands while a rerender restore is in flight', 
 
   assert.equal(right.scrollTop, 400, 'the user scroll must win over the restore');
   assert.equal(left.scrollTop, 200, 'the diff pane must follow the user scroll, not the restore');
+});
+
+test('leaves the diff pane alone when the restore lands on a clamped anchor', () => {
+  const { left, right, tick, view } = harness({ deliverFirst: true, delay: 1, leftPad: 40, rightPad: 16 });
+
+  right.dispatch('pointerdown');  // 프리뷰를 클릭만 해도 출발점이 넘어간다
+  right.scrollTop = 0;
+  view.invalidateAnchors();
+  view.resync();
+  for (let i = 0; i < 6; i += 1) tick();
+
+  assert.equal(left.scrollTop, 0, 'the restore must not push the diff pane off the top');
+});
+
+test('leaves the diff pane alone when the restore hits the preview scroll limit', () => {
+  const { left, right, tick, view } = harness({
+    deliverFirst: true, delay: 1, leftPad: 40, rightPad: 16, rightMax: 300,
+  });
+
+  left.userScroll(240);
+  for (let i = 0; i < 4; i += 1) tick();
+  right.dispatch('pointerdown');
+
+  right.scrollTop = 0;
+  view.invalidateAnchors();
+  view.resync();
+  for (let i = 0; i < 6; i += 1) tick();
+
+  assert.equal(left.scrollTop, 240, 'a clamped restore must not become the new source of truth');
 });
 
 test('resyncs before the user has scrolled either pane', () => {

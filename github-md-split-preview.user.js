@@ -1569,6 +1569,10 @@
     let leftAnchors = null;
     let rightAnchors = null;
     let rafId = 0;
+    // 대입한 값은 브라우저가 클램프한 뒤 되읽어 기억한다. 그 대입이 발생시킨 scroll 을 사용자
+    // 스크롤로 오인하면 반대쪽이 엉뚱한 위치로 밀린다 — interpolate 의 양끝 클램프와 스크롤
+    // 최대치 클램프 때문에 좌→우→좌 왕복이 제자리로 돌아오지 않기 때문이다.
+    const settled = new WeakMap();
     // 사용자가 직접 조작한 패널만 동기화의 출발점으로 삼는다. 대입 직후 한 프레임만
     // scroll 이벤트를 무시하는 방식으로 바꾸면 Safari 에서 동작하지 않는다 — scrollTop 대입으로
     // 발생한 이벤트가 그 프레임보다 늦게 도착해 반대 방향 동기화가 실행되고, 좌우 앵커
@@ -1612,6 +1616,7 @@
       // Safari 는 scrollTop 대입 때마다 관성 스크롤을 중단시키므로 1px 미만은 대입하지 않는다
       if (Math.abs(to.scrollTop - next) < 1) return;
       to.scrollTop = next;
+      settled.set(to, to.scrollTop);
     };
 
     // 사용자 스크롤은 프레임마다 여러 번 발생하므로 rAF 로 묶는다. 복원(resync)까지 같은
@@ -1637,10 +1642,12 @@
     }
 
     left.addEventListener('scroll', () => {
+      if (settled.get(left) === left.scrollTop) return;
       if (driver !== left) return;
       sync(left, right, () => leftAnchors, () => rightAnchors);
     }, { passive: true });
     right.addEventListener('scroll', () => {
+      if (settled.get(right) === right.scrollTop) return;
       if (driver !== right) return;
       sync(right, left, () => rightAnchors, () => leftAnchors);
     }, { passive: true });
