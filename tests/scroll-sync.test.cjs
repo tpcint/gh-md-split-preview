@@ -262,6 +262,23 @@ test('leaves the diff pane alone when the restore hits the preview scroll limit'
   assert.equal(left.scrollTop, 240, 'a clamped restore must not become the new source of truth');
 });
 
+test('follows a preview scroll that returns to the last synced position', () => {
+  const { left, right, tick } = harness();
+
+  left.userScroll(60);
+  for (let i = 0; i < 4; i += 1) tick();
+  assert.equal(right.scrollTop, 120);
+
+  right.userScroll(320);
+  for (let i = 0; i < 4; i += 1) tick();
+  assert.equal(left.scrollTop, 160);
+
+  right.userScroll(120);  // 직전에 우리가 맞춰 둔 값과 같은 위치로 되돌아온다
+  for (let i = 0; i < 6; i += 1) tick();
+
+  assert.equal(left.scrollTop, 60, 'a user scroll must never be mistaken for our own assignment');
+});
+
 test('resyncs before the user has scrolled either pane', () => {
   const { left, right, tick, view } = harness();
 

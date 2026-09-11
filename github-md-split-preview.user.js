@@ -1622,7 +1622,7 @@
     // 사용자 스크롤은 프레임마다 여러 번 발생하므로 rAF 로 묶는다. 복원(resync)까지 같은
     // rAF 에 예약하면 두 방향으로 어긋난다 — 복원 예약이 그 사이 도착한 사용자 스크롤을
     // 이전 위치로 덮어쓰거나, 사용자 스크롤이 실행한 동기화가 cancelAnimationFrame 으로
-    // 복원 예약을 취소한다. 그래서 복원은 apply 를 그 자리에서 호출한다.
+    // 복원 예약을 취소한다. 그래서 복원은 apply 를 곧바로 호출한다.
     const sync = (from, to, getFrom, getTo) => {
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => apply(from, to, getFrom, getTo));
@@ -1635,9 +1635,14 @@
 
     // 스크롤바 드래그·휠·키보드·터치 어느 쪽이든, 입력이 발생한 패널이 출발점이 된다.
     // 패널 내부 요소의 핸들러가 전파를 멈추더라도 받지 못하는 일이 없게 capture 로 등록한다.
+    // 기억해 둔 값은 여기서 제거한다. 남겨 두면 사용자가 그 위치로 되돌아온 스크롤까지
+    // 우리 대입으로 판정해 무시하고, 반대쪽이 따라오지 않은 채로 유지된다.
     for (const pane of [left, right]) {
       for (const type of ['wheel', 'pointerdown', 'touchstart', 'keydown']) {
-        pane.addEventListener(type, () => { driver = pane; }, { passive: true, capture: true });
+        pane.addEventListener(type, () => {
+          driver = pane;
+          settled.delete(pane);
+        }, { passive: true, capture: true });
       }
     }
 
