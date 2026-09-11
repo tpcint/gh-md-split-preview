@@ -1635,24 +1635,27 @@
 
     // 스크롤바 드래그·휠·키보드·터치 어느 쪽이든, 입력이 발생한 패널이 출발점이 된다.
     // 패널 내부 요소의 핸들러가 전파를 멈추더라도 받지 못하는 일이 없게 capture 로 등록한다.
-    // 기억해 둔 값은 여기서 제거한다. 남겨 두면 사용자가 그 위치로 되돌아온 스크롤까지
-    // 우리 대입으로 판정해 무시하고, 반대쪽이 따라오지 않은 채로 유지된다.
     for (const pane of [left, right]) {
       for (const type of ['wheel', 'pointerdown', 'touchstart', 'keydown']) {
-        pane.addEventListener(type, () => {
-          driver = pane;
-          settled.delete(pane);
-        }, { passive: true, capture: true });
+        pane.addEventListener(type, () => { driver = pane; }, { passive: true, capture: true });
       }
     }
 
+    // 기억값은 값이 다른 scroll 이 왔을 때, 즉 사용자가 그 패널을 실제로 스크롤했을 때만
+    // 제거한다. 입력 이벤트에서 제거하면 대입이 발생시킨 scroll 이 도착하기 전에 그 패널을
+    // 클릭하거나 키를 누른 경우 그 이벤트가 가드를 통과해, 방금 맞춘 위치를 역보간한 값으로
+    // 반대쪽이 이동한다. 값이 같을 때 제거하는 것도 안 된다 — 한 대입이 scroll 을 두 번
+    // 발생시키면 두 번째가 통과한다.
+
     left.addEventListener('scroll', () => {
       if (settled.get(left) === left.scrollTop) return;
+      settled.delete(left);
       if (driver !== left) return;
       sync(left, right, () => leftAnchors, () => rightAnchors);
     }, { passive: true });
     right.addEventListener('scroll', () => {
       if (settled.get(right) === right.scrollTop) return;
+      settled.delete(right);
       if (driver !== right) return;
       sync(right, left, () => rightAnchors, () => leftAnchors);
     }, { passive: true });

@@ -279,6 +279,32 @@ test('follows a preview scroll that returns to the last synced position', () => 
   assert.equal(left.scrollTop, 60, 'a user scroll must never be mistaken for our own assignment');
 });
 
+test('ignores an assignment echo that arrives after a click on the same pane', () => {
+  const { left, right, tick } = harness({
+    deliverFirst: true, delay: 2, leftPad: 40, rightPad: 16, rightMax: 300,
+  });
+
+  left.userScroll(240);  // 프리뷰 대상값은 최대치를 넘어 클램프된다
+  tick();
+  right.dispatch('pointerdown');  // 대입이 발생시킨 scroll 이 도착하기 전에 클릭한다
+  for (let i = 0; i < 8; i += 1) tick();
+
+  assert.equal(left.scrollTop, 240, 'a click must not turn our own assignment into a user scroll');
+});
+
+test('ignores an assignment echo that arrives after a keypress on the same pane', () => {
+  const { left, right, tick } = harness({
+    deliverFirst: true, delay: 2, leftPad: 40, rightPad: 16, rightMax: 300,
+  });
+
+  left.userScroll(240);
+  tick();
+  right.dispatch('keydown');
+  for (let i = 0; i < 8; i += 1) tick();
+
+  assert.equal(left.scrollTop, 240);
+});
+
 test('resyncs before the user has scrolled either pane', () => {
   const { left, right, tick, view } = harness();
 
